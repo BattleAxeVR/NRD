@@ -12,7 +12,7 @@ endif()
 
 # Options
 option(NRD_STATIC_LIBRARY "Build static library" OFF)
-option(NRD_NRI "Pull, build and include NRI into NRD SDK package" OFF)
+option(NRD_NRI "Pull, build and include NRI into NRD SDK package" ON)
 option(NRD_SUPPORTS_VIEWPORT_OFFSET "Enable 'CommonSettings::rectOrigin' support" OFF)
 option(NRD_SUPPORTS_CHECKERBOARD "Enable 'checkerboardMode' support" ON)
 option(NRD_SUPPORTS_HISTORY_CONFIDENCE "Enable 'IN_DIFF_CONFIDENCE' and 'IN_SPEC_CONFIDENCE' support" ON)
@@ -25,7 +25,7 @@ cmake_dependent_option(NRD_EMBEDS_DXIL_SHADERS "NRD embeds DXIL shaders" ON "WIN
 cmake_dependent_option(NRD_EMBEDS_DXBC_SHADERS "NRD embeds DXBC shaders" ON "WIN32" OFF)
 
 set(NRD_SHADERS_PATH "" CACHE STRING "Shader output path override")
-set(NRD_NORMAL_ENCODING "2" CACHE STRING "Normal encoding variant (0-4, matches 'nrd::NormalEncoding')")
+set(NRD_NORMAL_ENCODING "4" CACHE STRING "Normal encoding variant (0-4, matches 'nrd::NormalEncoding')")
 set(NRD_ROUGHNESS_ENCODING "1" CACHE STRING "Roughness encoding variant (0-2, matches 'nrd::RoughnessEncoding')")
 
 # Self-build?
