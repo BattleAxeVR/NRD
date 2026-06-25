@@ -19,7 +19,7 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 groupshared int s_Sum;
 
 [numthreads( 8, 4, 1 )]
-NRD_EXPORT void NRD_CS_MAIN( uint2 threadPos : SV_GroupThreadId, uint2 tilePos : SV_GroupId, uint threadIndex : SV_GroupIndex )
+NRD_EXPORT void NRD_CS_MAIN( uint2 threadPos : SV_GroupThreadID, uint2 tilePos : SV_GroupID, uint threadIndex : SV_GroupIndex )
 {
     if( threadIndex == 0 )
         s_Sum = 0;
@@ -38,7 +38,7 @@ NRD_EXPORT void NRD_CS_MAIN( uint2 threadPos : SV_GroupThreadId, uint2 tilePos :
             uint2 pos = pixelPos + uint2( i, j );
             float viewZ = UnpackViewZ( gIn_ViewZ[ WithRectOrigin( pos ) ] );
 
-            sum += viewZ > gDenoisingRange ? 1 : 0;
+            sum += !IsInDenoisingRange( viewZ ) ? 1 : 0;
         }
     }
 

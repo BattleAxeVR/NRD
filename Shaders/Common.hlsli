@@ -8,40 +8,8 @@ distribution of this software and related documentation without an express
 license agreement from NVIDIA CORPORATION is strictly prohibited.
 */
 
-//==================================================================================================================
-// Naming convention
-//==================================================================================================================
-// g[In/Prev/History/Out]_[A]_[B]
-// gIn_         - an input
-// gPrev_       - an input from the previous frame ( looks better than "gInPrev_" )
-// gHistory_    - an input from the previous frame, which is a history buffer ( looks better than "gInHistory_" )
-// gOut_        - an output
-// _            - means "and" ( when used in-between A and B )
-// s_           - shared memory
-// Fast         - fast history
-// Noisy        - noisy input, where an emphasis needed
-
-#include "Poisson.hlsli"
-
-// Constants
-
-#define NRD_NONE                                                0 // bad
-#define NRD_FRAME                                               1 // good
-#define NRD_PIXEL                                               2 // better, but leads to divergence
-#define NRD_RANDOM                                              3 // for experiments only
-
-// FP16
-
-#ifdef __hlsl_dx_compiler
-    #define half_float float16_t
-    #define half_float2 float16_t2
-    #define half_float3 float16_t3
-    #define half_float4 float16_t4
-#else
-    #define half_float float
-    #define half_float2 float2
-    #define half_float3 float3
-    #define half_float4 float4
+#ifndef NRD_INTERNAL
+    #error "'NRD_INTERNAL' is not defined, but expected!"
 #endif
 
 //==================================================================================================================
@@ -69,6 +37,19 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
     #define NRD_SUPPORTS_ANTIFIREFLY                            1
 #endif
 
+#ifndef NRD_SUPPORTS_QUAD_INTRINSICS
+    #if( defined( NRD_COMPILER_DXC ) || defined( NRD_COMPILER_PSSLC ) )
+        #define NRD_SUPPORTS_QUAD_INTRINSICS                    1
+    #else
+        #define NRD_SUPPORTS_QUAD_INTRINSICS                    0
+    #endif
+#else
+    #if( defined( NRD_COMPILER_FXC ) )
+        #undef NRD_SUPPORTS_QUAD_INTRINSICS
+        #define NRD_SUPPORTS_QUAD_INTRINSICS                    0
+    #endif
+#endif
+
 // Switches ( default 1 )
 #define NRD_USE_TILE_CHECK                                      1 // significantly improves performance by skipping computations in "empty" regions
 #define NRD_USE_DENANIFICATION                                  1 // needed only if inputs have NAN / INF outside of viewport or denoising range
@@ -76,10 +57,11 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 // Switches ( default 0 )
 #define NRD_USE_QUADRATIC_DISTRIBUTION                          0
 #define NRD_USE_EXPONENTIAL_WEIGHTS                             0
+#define NRD_USE_PREV_WORLD_SPACE_MATRIX                         0 // was added for Portal RTX to support entering / leaving portals without a full history reset ( not needed )
 
 // Settings
 #define NRD_DISOCCLUSION_THRESHOLD                              0.02 // normalized % // TODO: use CommonSettings::disocclusionThreshold?
-#define NRD_CATROM_SHARPNESS                                    0.5  // [ 0; 1 ], 0.5 matches Catmull-Rom // TODO: use 0.6?
+#define NRD_CATROM_SHARPNESS                                    0.5  // [ 0; 1 ], 0.5 matches Catmull-Rom ( do not change! )
 #define NRD_RADIANCE_COMPRESSION_MODE                           3    // 0-4, specular color compression for spatial passes
 #define NRD_EXP_WEIGHT_DEFAULT_SCALE                            3.0
 #define NRD_ROUGHNESS_SENSITIVITY                               0.01 // smaller => more sensitive
@@ -99,12 +81,45 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
     #define STOCHASTIC_BILINEAR_FILTER                          gLinearClamp
 #endif
 
+// Constants
+#define NRD_NONE                                                0 // bad
+#define NRD_FRAME                                               1 // good
+#define NRD_PIXEL                                               2 // better, but leads to divergence
+#define NRD_RANDOM                                              3 // for experiments only
+
+// FP16
+#ifdef __hlsl_dx_compiler
+    #define half_float float16_t
+    #define half_float2 float16_t2
+    #define half_float3 float16_t3
+    #define half_float4 float16_t4
+#else
+    #define half_float float
+    #define half_float2 float2
+    #define half_float3 float3
+    #define half_float4 float4
+#endif
+
+//==================================================================================================================
+// Naming convention
+//==================================================================================================================
+
+// g[In/Prev/History/Out]_[A]_[B]
+// gIn_         - an input
+// gPrev_       - an input from the previous frame ( looks better than "gInPrev_" )
+// gHistory_    - an input from the previous frame, which is a history buffer ( looks better than "gInHistory_" )
+// gOut_        - an output
+// _            - means "and" ( when used in-between A and B )
+// s_           - shared memory
+// Fast         - fast history
+// Noisy        - noisy input, where an emphasis needed
+
 //==================================================================================================================
 // CTA & preloading
 //==================================================================================================================
 
 // CTA swizzling
-#define NRD_CS_MAIN_ARGS                                        int2 threadPos : SV_GroupThreadId, uint2 groupPos : SV_GroupId, int2 _pixelPos : SV_DispatchThreadId, uint threadIndex : SV_GroupIndex
+#define NRD_CS_MAIN_ARGS                                        int2 threadPos : SV_GroupThreadID, uint2 groupPos : SV_GroupID, int2 _pixelPos : SV_DispatchThreadID, uint threadIndex : SV_GroupIndex
 
 // IMPORTANT: incompatible with "USE_PREV_DIMS", "IGNORE_RS" and dispatches with "downsampleFactor > 1"
 #if 1
@@ -176,6 +191,8 @@ Usage:
 // KERNELS
 //==================================================================================================================
 
+#include "Poisson.hlsli"
+
 static const float3 g_Special6[ 6 ] =
 {
     // https://www.desmos.com/calculator/e5mttzlg6v
@@ -242,6 +259,7 @@ static const float3 g_Special8[ 8 ] =
 #endif
 
 #define UnpackViewZ( z )                        abs( z * gViewZScale )
+#define IsInDenoisingRange( z )                 ( z < gDenoisingRange ) // "!IsInDenoisingRange( viewZ )" is NAN safe
 
 float PixelRadiusToWorld( float unproject, float orthoMode, float pixelRadius, float viewZ )
 {
@@ -294,7 +312,9 @@ float IsInScreenNearest( float2 uv )
 float2 MirrorUv( float2 uv )
 {
     // https://www.desmos.com/calculator/vreqlhocsm
-    return 1.0 - abs( 1.0 - frac( uv * 0.5 ) * 2.0 );
+    float2 mirrorUv = 1.0 - abs( 1.0 - frac( uv * 0.5 ) * 2.0 );
+
+    return min( mirrorUv, 0.99999 ); // avoid "uv == 1", because "1 * gRectSize" is outside of the render area
 }
 
 // x y
@@ -544,6 +564,13 @@ float2 GetRelaxedRoughnessWeightParams( float m, float fraction = 1.0, float sen
     #define ComputeWeight( x, px, py )     ComputeNonExponentialWeight( x, px, py )
 #endif
 
+float ApplyGeometryWeightLast( float w, float z, float NoX, float2 geometryWeightParams )
+{
+    w *= ComputeWeight( NoX, geometryWeightParams.x, geometryWeightParams.y );
+
+    return !IsInDenoisingRange( z ) ? 0.0 : w; // |NoX| can be ~0 if "zs" is out of range
+}
+
 float GetGaussianWeight( float r )
 {
     return exp( -0.66 * r * r ); // assuming r is normalized to 1
@@ -554,7 +581,7 @@ float GetGaussianWeight( float r )
 float GetEncodingAwareNormalWeight( float3 Ncurr, float3 Nprev, float maxAngle, float curvatureAngle, float thresholdAngle )
 {
     float cosa = dot( Ncurr, Nprev );
-    float angle = Math::AcosApprox( cosa );
+    float angle = Math::AcosApproxPositive( cosa );
     float w = Math::SmoothStep01( 1.0 - ( angle - curvatureAngle - thresholdAngle ) / maxAngle );
 
     // Needed to mitigate potential issues due to encoding mismatch, small "maxAngle" or imprecise "acos" ( test 3, 43 if roughness is low )

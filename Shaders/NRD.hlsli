@@ -194,10 +194,10 @@ NOISY INPUTS:
 
     #define numthreads                                                                  NUM_THREADS
     #define groupshared                                                                 thread_group_memory
-    #define SV_GroupId                                                                  S_GROUP_ID
+    #define SV_GroupID                                                                  S_GROUP_ID
     #define SV_GroupIndex                                                               S_GROUP_INDEX
-    #define SV_GroupThreadId                                                            S_GROUP_THREAD_ID
-    #define SV_DispatchThreadId                                                         S_DISPATCH_THREAD_ID
+    #define SV_GroupThreadID                                                            S_GROUP_THREAD_ID
+    #define SV_DispatchThreadID                                                         S_DISPATCH_THREAD_ID
     #define GroupMemoryBarrierWithGroupSync                                             ThreadGroupMemoryBarrierSync
     #define GroupMemoryBarrier                                                          ThreadGroupMemoryBarrier
     #define RWTexture2D                                                                 RW_Texture2D
@@ -262,6 +262,12 @@ NOISY INPUTS:
 
     #define NRD_EXPORT
 
+    #ifndef NRD_COMPILER_FXC
+        #define NRD_COMPILER_FXC
+    #endif
+
+    #pragma warning( disable: 3577 ) // value cannot be NaN, isnan() may not be necessary. /Gis may force isnan() to be performed
+
 #endif
 
 //=================================================================================================================================
@@ -302,12 +308,19 @@ NOISY INPUTS:
     #ifndef rcp
         #define rcp( x )                                                                ( 1.0 / ( x ) )
     #endif
+    #ifndef any
+        bool any( bool value )
+        {
+            return value;
+        }
+    #endif
 #endif
 
 //=================================================================================================================================
 // PRIVATE
 //=================================================================================================================================
 
+// Defined in CMake
 #ifdef NRD_INTERNAL
     // Explicitly set matrix layout for shader compilation outside of NRD environment
     #pragma pack_matrix( column_major )
@@ -341,8 +354,8 @@ NOISY INPUTS:
 // Constants
 #define NRD_FP16_MAX                                                                    65504.0
 #define NRD_PI                                                                          3.14159265358979323846
-#define NRD_EPS                                                                         1e-6
-#define NRD_INF                                                                         1e6
+#define NRD_EPS                                                                         1e-6 // must fit into FP16
+#define NRD_INF                                                                         1e6  // why it's here? mostly for compatibility with existing code
 
 // Misc
 float3 _NRD_SafeNormalize( float3 v )
@@ -559,16 +572,8 @@ float _REBLUR_GetHitDistanceNormalization( float viewZ, float3 hitDistParams, fl
     return ( hitDistParams.x + abs( viewZ ) * hitDistParams.y ) * lerp( hitDistParams.z, 1.0, smc );
 }
 
-// Is valid?
-bool _NRD_IsInvalid( float3 x )
-{
-    return any( isnan( x ) ) || any( isinf( x ) );
-}
-
-bool _NRD_IsInvalid( float x )
-{
-    return isnan( x ) || isinf( x );
-}
+// Is invalid?
+#define _NRD_IsInvalid( x ) ( any( isnan( x ) ) || any( isinf( x ) ) )
 
 //==============================================================================================================================================
 // SPHERICAL HARMONICS: https://media.contentapi.ea.com/content/dam/eacom/frostbite/files/gdc2018-precomputedgiobalilluminationinfrostbite.pdf
@@ -599,11 +604,6 @@ NRD_SG _NRD_SG_Create( float3 radiance, float3 direction, float normHitDist )
     return sg;
 }
 
-float3 _NRD_SG_ExtractDirection( NRD_SG sg )
-{
-    return sg.c1 / max( length( sg.c1 ), NRD_EPS );
-}
-
 float _NRD_SG_IntegralApprox( NRD_SG sg )
 {
     return 2.0 * NRD_PI * ( sg.c0 / sg.sharpness );
@@ -630,7 +630,7 @@ float _NRD_SG_InnerProduct( NRD_SG a, NRD_SG b )
 }
 
 //=================================================================================================================================
-// FRONT-END - GENERAL
+// FRONT-END - NORMAL AND ROUGHNESS
 //=================================================================================================================================
 
 // Used to decode linear roughness accessed via "Gather" instructions
@@ -721,7 +721,9 @@ float4 NRD_FrontEnd_PackNormalAndRoughness( float3 N, float roughness, float mat
     return p;
 }
 
-// MATERIAL DEMODULATION
+//=================================================================================================================================
+// FRONT-END - MATERIAL DEMODULATION
+//=================================================================================================================================
 
 //   Front-end usage ( before NRD, convert irradiance into radiance ):
 //      diffIrradiance /= diffFactor
@@ -743,11 +745,35 @@ void NRD_MaterialFactors( float3 N, float3 V, float3 albedo, float3 Rf0, float r
     specFactor = lerp( NRD_MATERIAL_FACTOR_MIN_SCALE.xxx, float3( 1.0, 1.0, 1.0 ), specFactor );
 }
 
-// SPECULAR HIT DISTANCE AVERAGING ( in case of rpp > 1 )
+//=================================================================================================================================
+// FRONT-END - SPECULAR HIT DISTANCE AVERAGING ( paths / pixel > 1 )
+//=================================================================================================================================
+
+// NRD uses hit distances:
+// - to guide denoising
+//   - REBLUR: throughout the entire pipeline
+//   - RELAX: in the "Pre Pass" only
+// - to compute specular motion
+// To compute specular motion "Pre Pass" outputs "min hit distance in some area" to the "Temporal Accumulation" pass for further processing.
+// This information dosn't affect the original hit distances, which are needed for denoising guidance. This works as expected.
+
+// PROBLEM: If multiple paths are computed on the application side, the only thing we can do without changing the API is to find the
+// "min hit distance" on the fly. It's a lesser evil that still offers proper specular motion. "Min hit distance" is suboptimal for denoising
+// guidance, but it's acceptable. It's an interim solution for now, because NRD in its current form was designed to work with 1 path / pixel.
+
+// TODO: the problem above may be solved in two ways:
+// - use hit distances only for denoising guidance and introduce "IN_SPEC_MV" inputs coming from the application side
+//   - PROS: simple for NRD
+//   - CONS: a major pain for the application ( even if some helpers are provided )
+// - introduce a new input "IN_MIN_HIT_DISTANCE" ( use current hit distance input, encoded into the ".w" channel, for denoising guidance as usual )
+//   - PROS: flexible and easy to use ( assuming simple helpers are provided )
+//   - CONS: negligible overhead from the new input
+
+#define _NRD_INF_INTERNAL 3.40282347e+38
 
 float NRD_FrontEnd_SpecHitDistAveraging_Begin( )
 {
-    return NRD_INF;
+    return _NRD_INF_INTERNAL;
 }
 
 float NRD_FrontEnd_TrimHitDistance( float hitDist, float threshold ) // optional
@@ -761,12 +787,12 @@ float NRD_FrontEnd_TrimHitDistance( float hitDist, float threshold ) // optional
 void NRD_FrontEnd_SpecHitDistAveraging_Add( inout float accumulatedSpecHitDist, float hitDist )
 {
     // TODO: for high roughness it can be blended to average
-    accumulatedSpecHitDist = min( accumulatedSpecHitDist, hitDist == 0.0 ? NRD_INF : hitDist );
+    accumulatedSpecHitDist = min( accumulatedSpecHitDist, hitDist == 0.0 ? _NRD_INF_INTERNAL : hitDist );
 }
 
 void NRD_FrontEnd_SpecHitDistAveraging_End( inout float accumulatedSpecHitDist )
 {
-    accumulatedSpecHitDist = accumulatedSpecHitDist == NRD_INF ? 0.0 : accumulatedSpecHitDist;
+    accumulatedSpecHitDist = accumulatedSpecHitDist == _NRD_INF_INTERNAL ? 0.0 : accumulatedSpecHitDist;
 }
 
 //=================================================================================================================================
@@ -775,7 +801,7 @@ void NRD_FrontEnd_SpecHitDistAveraging_End( inout float accumulatedSpecHitDist )
 
 // FRONT-END
 
-// This function returns AO / SO which REBLUR can decode back to "hit distance" internally
+// Normalized hit distance for REBLUR, which can be decoded back to "units" internally
 float REBLUR_FrontEnd_GetNormHitDist( float hitDist, float viewZ, float3 hitDistParams, float roughness )
 {
     float f = _REBLUR_GetHitDistanceNormalization( viewZ, hitDistParams, roughness );
@@ -850,14 +876,14 @@ float4 REBLUR_BackEnd_UnpackRadianceAndNormHitDist( float4 data )
 
 // OUT_DIFF_SH0 and OUT_DIFF_SH1 => X
 // OUT_SPEC_SH0 and OUT_SPEC_SH1 => X
-NRD_SG REBLUR_BackEnd_UnpackSh( float4 sh0, float4 sh1 )
+NRD_SG REBLUR_BackEnd_UnpackSh( float4 sh0, float3 sh1 )
 {
     NRD_SG sg;
     sg.c0 = sh0.x;
     sg.chroma = sh0.yz;
     sg.normHitDist = sh0.w;
-    sg.c1 = sh1.xyz;
-    sg.sharpness = sh1.w;
+    sg.c1 = sh1;
+    sg.sharpness = 0.0; // computed in resolve
 
     return sg;
 }
@@ -870,7 +896,7 @@ NRD_SG REBLUR_BackEnd_UnpackDirectionalOcclusion( float4 data )
     sg.chroma = float2( 0, 0 );
     sg.normHitDist = data.w;
     sg.c1 = data.xyz;
-    sg.sharpness = 0.0;
+    sg.sharpness = 0.0; // computed in resolve
 
     return sg;
 }
@@ -925,14 +951,14 @@ float4 RELAX_BackEnd_UnpackRadiance( float4 color )
 
 // OUT_DIFF_SH0 and OUT_DIFF_SH1 => X
 // OUT_SPEC_SH0 and OUT_SPEC_SH1 => X
-NRD_SG RELAX_BackEnd_UnpackSh( float4 sh0, float4 sh1 )
+NRD_SG RELAX_BackEnd_UnpackSh( float4 sh0, float3 sh1 )
 {
     NRD_SG sg;
     sg.c0 = sh0.x;
     sg.chroma = sh0.yz;
     sg.normHitDist = sh0.w;
-    sg.c1 = sh1.xyz;
-    sg.sharpness = sh1.w;
+    sg.c1 = sh1;
+    sg.sharpness = 0.0;
 
     return sg;
 }
@@ -994,12 +1020,7 @@ float3 NRD_SG_ExtractColor( NRD_SG sg )
 
 float3 NRD_SG_ExtractDirection( NRD_SG sg )
 {
-    return _NRD_SG_ExtractDirection( sg );
-}
-
-float NRD_SG_ExtractRoughnessAA( NRD_SG sg )
-{
-    return sg.sharpness;
+    return sg.c1 / max( length( sg.c1 ), NRD_EPS );
 }
 
 void NRD_SG_Rotate( inout NRD_SG sg, float3x3 rotation )
@@ -1010,7 +1031,7 @@ void NRD_SG_Rotate( inout NRD_SG sg, float3x3 rotation )
 // https://therealmjp.github.io/posts/sg-series-part-3-diffuse-lighting-from-an-sg-light-source/
 float3 NRD_SG_ResolveDiffuse( NRD_SG sg, float3 N, float3 V, float roughness )
 {
-    float3 L = _NRD_SG_ExtractDirection( sg );
+    float3 L = NRD_SG_ExtractDirection( sg );
     float NoL = saturate( dot( N, L ) );
 
     // SG light
@@ -1053,12 +1074,12 @@ float3 NRD_SG_ResolveDiffuse( NRD_SG sg, float3 N, float3 V, float roughness )
 float3 NRD_SG_ResolveSpecular( NRD_SG sg, float3 N, float3 V, float roughness )
 {
     // Clamp roughness to avoid numerical imprecisions
-    roughness = max( roughness, 0.03 );
+    roughness = max( roughness, 0.05 );
 
     float m = roughness * roughness;
     float m2 = m * m;
 
-    float3 L = _NRD_SG_ExtractDirection( sg );
+    float3 L = NRD_SG_ExtractDirection( sg );
     float NoL = saturate( dot( N, L ) );
 
     float3 H = normalize( L + V );
@@ -1115,8 +1136,8 @@ float2 NRD_SG_ReJitter(
 )
 {
     // Extract dominant light directions
-    float3 Ld = _NRD_SG_ExtractDirection( diffSg );
-    float3 Ls = _NRD_SG_ExtractDirection( specSg );
+    float3 Ld = NRD_SG_ExtractDirection( diffSg );
+    float3 Ls = NRD_SG_ExtractDirection( specSg );
 
     // Fix instabilities
     Ls = normalize( lerp( V, Ls, roughness ) );
@@ -1138,10 +1159,10 @@ float2 NRD_SG_ReJitter(
     // Z weights
     float NoV = abs( dot( N, V ) );
     float zThreshold = NRD_REJITTER_VIEWZ_THRESHOLD * abs( Z ) / ( NoV * 0.95 + 0.05 );
-    float4 w = step( abs( float4( Ze, Zw, Zn, Zs ) - Z ), zThreshold );
-    bool isSymmetrical = dot( w, 1.0 ) > 3.5;
+    float4 w = step( abs( float4( Ze, Zw, Zn, Zs ) - Z ), zThreshold.xxxx );
+    bool isSymmetrical = dot( w, float4( 1.0, 1.0, 1.0, 1.0 ) ) > 3.5;
 
-    return isSymmetrical ? j : 1.0;
+    return isSymmetrical ? j : float2( 1.0, 1.0 );
 }
 
 //=================================================================================================================================
@@ -1170,6 +1191,90 @@ float3 NRD_SH_ResolveSpecular( NRD_SG sh, float3 N, float3 V, float roughness )
     float Y = sh.c0 * k0 + dot( sh.c1, D ) * k1; // suboptimal, use SG resolve instead
 
     return _NRD_YCoCgToLinear_Corrected( Y, sh.c0, sh.chroma );
+}
+
+//=================================================================================================================================
+// CAVITY SHADOW RESOLVE
+//=================================================================================================================================
+
+float _NRD_SolidAngle( float coneCosAngle )
+{
+    return 2.0 * NRD_PI * ( 1.0 - coneCosAngle );
+}
+
+float _NRD_AcosApproxSphere( float x )
+{
+    float a = saturate( abs( x ) );
+    float b = ( 0.5 * NRD_PI - 0.156583 * a ) * sqrt( 1.0 - a );
+
+    return x >= 0 ? b : ( NRD_PI - b );
+}
+
+float _NRD_CosDifference( float cosA, float cosB )
+{
+    float sqSinA = saturate( 1.0 - cosA * cosA );
+    float sqSinB = saturate( 1.0 - cosB * cosB );
+
+    return cosA * cosB + sqrt( sqSinA * sqSinB ); // cos( A - B )
+}
+
+float3 _NRD_RotateTowards( float3 a, float3 b, float cosAngle )
+{
+    float cosTheta = dot( a, b );
+    float sinAngle = sqrt( saturate( 1.0 - cosAngle * cosAngle ) );
+    float sinTheta = sqrt( saturate( 1.0 - cosTheta * cosTheta ) );
+    float sinDiff = sinTheta * cosAngle - sinAngle * cosTheta; // sin( theta - angle )
+    float3 rotated = ( sinDiff * a + sinAngle * b ) * rcp( sinTheta );
+
+    return sinTheta < NRD_EPS ? a : rotated;
+}
+
+float4 _NRD_GetSphericalCapIntersection( float3 axisA, float cosA, float3 axisB, float cosB )
+{
+    float radiusA = _NRD_AcosApproxSphere( cosA );
+    float radiusB = _NRD_AcosApproxSphere( cosB );
+
+    float cosDist = dot( axisA, axisB );
+    float dist = _NRD_AcosApproxSphere( cosDist );
+
+    // Early out if angle between the cones is larger than the sum of their angles, which indicates no intersection
+    if( dist > radiusA + radiusB )
+        return float4( axisA, 1.0 ); // using "axisA" is safe, because the cos is 1 ( i.e. 0 angle )
+
+    // Cone A fully inside cone B, return cone A
+    if( radiusB > radiusA + dist )
+        return float4( axisA, cosA );
+
+    // Cone B fully inside cone A, return cone B
+    if( radiusA > radiusB + dist )
+        return float4( axisB, cosB );
+
+    // Intersection angle
+    float diff = abs( radiusA - radiusB );
+    float x = 1.0 - saturate( ( dist - diff ) * rcp( radiusA + radiusB - diff ) );
+    float area = x * x * ( 3.0 - 2.0 * x );
+    float intersectionAngle = 1.0 - area * ( 1.0 - max( cosA, cosB ) );
+
+    // Axis that is the center of the overlapping area
+    float cosDelta = _NRD_CosDifference( cosA, cosB );
+    float cosAngle = sqrt( 0.5 * _NRD_CosDifference( cosDist, cosDelta ) + 0.5 );
+    float3 L = _NRD_RotateTowards( axisB, axisA, cosAngle );
+
+    return float4( L, intersectionAngle );
+}
+
+// Source: "Dark Souls 2: Scholar of The First Sin ( DSLE mod with path tracing )"
+// Defaults: cosLightAngle = 0.707106, shadowStrength = 0.85
+float NRD_ComputeCavityShadow( NRD_SG sg, float3 N, float cavity, float cosLightAngle, float shadowStrength )
+{
+    float coneCosAngle = sqrt( saturate( 1.0 - cavity ) );
+    float3 lightDir = NRD_SG_ExtractDirection( sg );
+    float4 coneIntersection = _NRD_GetSphericalCapIntersection( N, coneCosAngle, lightDir, cosLightAngle );
+
+    float lightSolidAngle = _NRD_SolidAngle( cosLightAngle );
+    float shadow = saturate( _NRD_SolidAngle( coneIntersection.w ) / max( lightSolidAngle, NRD_EPS ) );
+
+    return lerp( 1.0, shadow, shadowStrength );
 }
 
 //=================================================================================================================================

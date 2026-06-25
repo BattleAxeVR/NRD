@@ -22,7 +22,7 @@ groupshared uint s_Mask;
 groupshared uint s_Radius;
 
 [numthreads( 8, 4, 1 )]
-NRD_EXPORT void NRD_CS_MAIN( uint2 threadPos : SV_GroupThreadId, uint2 tilePos : SV_GroupId, uint threadIndex : SV_GroupIndex )
+NRD_EXPORT void NRD_CS_MAIN( uint2 threadPos : SV_GroupThreadID, uint2 tilePos : SV_GroupID, uint threadIndex : SV_GroupIndex )
 {
     if( threadIndex == 0 )
     {
@@ -47,7 +47,7 @@ NRD_EXPORT void NRD_CS_MAIN( uint2 threadPos : SV_GroupThreadId, uint2 tilePos :
             float h = gIn_Penumbra[ pos ];
             float viewZ = UnpackViewZ( gIn_ViewZ[ WithRectOrigin( pos ) ] );
 
-            bool isInf = viewZ > gDenoisingRange;
+            bool isInf = !IsInDenoisingRange( viewZ );
             bool isShadow = h == 0;
             bool isLit = IsLit( h );
 

@@ -99,9 +99,9 @@ namespace nrd
         // If coordinate system moves with the camera, camera delta must be included to reflect camera motion
         float worldToViewMatrixPrev[16] = {};
 
-        // (Optional) previous world-space to current world-space matrix. It is for virtual normals, where a coordinate
-        // system of the virtual space changes frame to frame, such as in a case of animated intermediary reflecting
-        // surfaces when primary surface replacement is used for them.
+        // (Optional) previous world-space to current world-space matrix. It was added for Portal RTX to
+        // support entering / leaving portals without a full history reset. Not needed in 100% of cases.
+        // Used only if "NRD_USE_PREV_WORLD_SPACE_MATRIX = 1" ("0" by default)
         float worldPrevToWorldMatrix[16] = {
             1.0f, 0.0f, 0.0f, 0.0f,
             0.0f, 1.0f, 0.0f, 0.0f,
@@ -130,6 +130,7 @@ namespace nrd
         float timeDeltaBetweenFrames = 0.0f;
 
         // (units > 0) - use TLAS or tracing range
+        // Pixels with "viewZ < denoisingRange" are considered valid, others are ignored
         // It's highly recommended to use "viewZ > denoisingRange" for INF (sky) pixels
         float denoisingRange = 500000.0f;
 
@@ -306,9 +307,6 @@ namespace nrd
 
         // (normalized %) - represents maximum allowed deviation from the local tangent plane
         float planeDistanceSensitivity = 0.02f;
-
-        // "IN_MV = lerp(IN_MV, specularMotion, smoothstep(this[0], this[1], specularProbability))"
-        float specularProbabilityThresholdsForMvModification[2] = {0.5f, 0.9f};
 
         // [1; 3] - undesired sporadic outliers suppression to keep output stable (smaller values maximize suppression in exchange of bias)
         float fireflySuppressorMinRelativeScale = 2.0f;

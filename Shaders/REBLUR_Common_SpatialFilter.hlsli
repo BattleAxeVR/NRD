@@ -57,15 +57,15 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 #endif
 
 {
-    uint2 pos = pixelPos;
+    uint2 inputPos = pixelPos;
 #if( REBLUR_SPATIAL_PASS == REBLUR_PRE_PASS )
-    pos.x >>= CHECKERBOARD == 2 ? 0 : 1;
+    inputPos.x >>= CHECKERBOARD == 2 ? 0 : 1;
 #endif
 
     float sum = 1.0;
-    REBLUR_TYPE result = INPUT[ pos ];
+    REBLUR_TYPE result = INPUT[ inputPos ];
     #if( NRD_MODE == SH )
-        REBLUR_SH_TYPE resultSh = INPUT_SH[ pos ];
+        REBLUR_SH_TYPE resultSh = INPUT_SH[ inputPos ];
     #endif
 
 #if( REBLUR_SPATIAL_PASS == REBLUR_PRE_PASS )
@@ -194,16 +194,11 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
         #endif
 
             // Apply "mirror" to not waste taps going outside of the screen
-            float2 uv01 = saturate( uv );
-            float w = GetGaussianWeight( offset.z );
-            if( any( uv != uv01 ) ) // TODO: this branch saves a bit of perf
-            {
-                uv = MirrorUv( uv );
-                w = 1.0; // offset.z is not valid after mirroring
-            }
+            float2 mirrorUv = MirrorUv( uv );
+            float w = any( uv != mirrorUv ) ? 1.0 : GetGaussianWeight( offset.z );
 
             // "uv" to "pos"
-            int2 pos = uv * gRectSize; // "uv" can't be "1"
+            int2 pos = mirrorUv * gRectSize;
 
             // Move to a "valid" pixel in checkerboard mode
             int checkerboardX = pos.x;
@@ -230,16 +225,15 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
             Ns = NRD_FrontEnd_UnpackNormalAndRoughness( Ns, materialIDs );
 
             // Weight
-            float angle = Math::AcosApprox( dot( N, Ns.xyz ) );
+            float angle = Math::AcosApproxPositive( dot( N, Ns.xyz ) );
             float NoX = dot( Nv, Xvs );
 
-            w *= ComputeWeight( NoX, geometryWeightParams.x, geometryWeightParams.y );
             w *= CompareMaterials( materialID, materialIDs, MIN_MATERIAL );
             w *= ComputeWeight( angle, normalWeightParam, 0.0 );
         #if( REBLUR_SPATIAL_LOBE == REBLUR_SPEC )
             w *= ComputeWeight( Ns.w, roughnessWeightParams.x, roughnessWeightParams.y );
         #endif
-            w = zs < gDenoisingRange ? w : 0.0; // |NoX| can be ~0 if "zs" is out of range
+            w = ApplyGeometryWeightLast( w, zs, NoX, geometryWeightParams );
 
             REBLUR_TYPE s = INPUT[ int2( checkerboardX, pos.y ) ];
             s = Denanify( w, s );
@@ -274,6 +268,7 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
             #if( NRD_MODE == SH )
                 REBLUR_SH_TYPE sh = INPUT_SH[ int2( checkerboardX, pos.y ) ];
                 sh = Denanify( w, sh );
+
                 resultSh += sh * w;
             #endif
         }

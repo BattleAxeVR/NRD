@@ -29,12 +29,12 @@ void Preload( uint2 sharedPos, int2 globalPos )
 
     #if( NRD_DIFF )
         float diffFast = gIn_DiffFast[ globalPos ];
-        s_DiffLuma[ sharedPos.y ][ sharedPos.x ] = viewZ > gDenoisingRange ? REBLUR_INVALID : diffFast;
+        s_DiffLuma[ sharedPos.y ][ sharedPos.x ] = !IsInDenoisingRange( viewZ ) ? REBLUR_INVALID : diffFast;
     #endif
 
     #if( NRD_SPEC )
         float specFast = gIn_SpecFast[ globalPos ];
-        s_SpecLuma[ sharedPos.y ][ sharedPos.x ] = viewZ > gDenoisingRange ? REBLUR_INVALID : specFast;
+        s_SpecLuma[ sharedPos.y ][ sharedPos.x ] = !IsInDenoisingRange( viewZ ) ? REBLUR_INVALID : specFast;
     #endif
 }
 
@@ -50,13 +50,31 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     float isSky = gIn_Tiles[ pixelPos >> 4 ].x;
     PRELOAD_INTO_SMEM_WITH_TILE_CHECK;
 
-    // Tile-based early out
-    if( isSky != 0.0 || any( pixelPos > gRectSizeMinusOne ) )
+    // Tile-based early out ( quad uniform )
+    if( isSky != 0.0 )
         return;
 
-    // Early out
+    // Blur stride
+    REBLUR_DATA1_TYPE frameNum = UnpackData1( gIn_Data1[ pixelPos ] );
+
     float viewZ = UnpackViewZ( gIn_ViewZ[ WithRectOrigin( pixelPos ) ] );
-    if( viewZ > gDenoisingRange )
+    frameNum = !IsInDenoisingRange( viewZ ) ? REBLUR_MAX_ACCUM_FRAME_NUM : frameNum; // less blur on "SKY" edges
+
+    float2 stride = float2( frameNum < gHistoryFixFrameNum );
+    #if( NRD_SUPPORTS_QUAD_INTRINSICS == 1 )
+    {
+        // IMPORTANT: the spec says: "these routines assume that flow control execution is uniform at least across the quad"
+        // Adapt to neighbors if they are more stable
+        float2 d10 = QuadReadAcrossX( stride );
+        float2 d01 = QuadReadAcrossY( stride );
+
+        float2 avg = ( d10 + d01 + stride ) / 3.0;
+        stride = min( stride, avg );
+    }
+    #endif
+
+    // Early out ( thread )
+    if( !IsInDenoisingRange( viewZ ) || any( pixelPos > gRectSizeMinusOne ) )
         return;
 
     // Center data
@@ -74,14 +92,12 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 
     int2 smemPos = threadPos + NRD_BORDER;
 
-    float2 frameNum = UnpackData1( gIn_Data1[ pixelPos ] );
     float invHistoryFixFrameNum = 1.0 / max( gHistoryFixFrameNum, NRD_EPS );
     float2 frameNumAvgNorm = saturate( frameNum * invHistoryFixFrameNum );
 
-    float2 stride = materialID == gHistoryFixAlternatePixelStrideMaterialID ? gHistoryFixAlternatePixelStride : gHistoryFixBasePixelStride;
     stride /= 1.0 + 1.0; // to match RELAX, where "frameNum" after "TemporalAccumulation" is "1", not "0"
     stride *= 2.0 / REBLUR_HISTORY_FIX_FILTER_RADIUS; // preserve blur radius in pixels ( default blur radius is 2 taps )
-    stride *= float2( frameNum < gHistoryFixFrameNum );
+    stride *= materialID == gHistoryFixAlternatePixelStrideMaterialID ? gHistoryFixAlternatePixelStride : gHistoryFixBasePixelStride;
 
     // Diffuse
     #if( NRD_DIFF )
@@ -99,20 +115,11 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
         hitDist = ExtractHitDist( diff );
 
         // Stride between taps
-        float diffStride = stride.x;
-        diffStride *= lerp( 0.25 + 0.75 * Math::Sqrt01( hitDistFactor ), 1.0, diffNonLinearAccumSpeed ); // "hitDistFactor" is very noisy and breaks nice patterns
-        #ifdef NRD_COMPILER_DXC
-            // Adapt to neighbors if they are more stable
-            float d10 = QuadReadAcrossX( diffStride );
-            float d01 = QuadReadAcrossY( diffStride );
-
-            float avg = ( d10 + d01 + diffStride ) / 3.0;
-            diffStride = min( diffStride, avg );
-        #endif
-        diffStride = round( diffStride );
+        stride.x *= lerp( 0.25 + 0.75 * Math::Sqrt01( hitDistFactor ), 1.0, diffNonLinearAccumSpeed ); // "hitDistFactor" is very noisy and breaks nice patterns
+        stride.x = round( stride.x );
 
         // History reconstruction
-        if( diffStride != 0.0 )
+        if( stride.x != 0.0 )
         {
             // Parameters
             float normalWeightParam = GetNormalWeightParam( diffNonLinearAccumSpeed, gLobeAngleFraction );
@@ -144,13 +151,13 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
                         continue;
 
                     // Sample uv ( at the pixel center )
-                    float2 uv = pixelUv + float2( i, j ) * diffStride * gRectSizeInv;
+                    float2 uv = pixelUv + float2( i, j ) * stride.x * gRectSizeInv;
 
                     // Apply "mirror" to not waste taps going outside of the screen
                     uv = MirrorUv( uv );
 
                     // "uv" to "pos"
-                    int2 pos = uv * gRectSize; // "uv" can't be "1"
+                    int2 pos = uv * gRectSize;
 
                     // Fetch data
                     float zs = UnpackViewZ( gIn_ViewZ[ WithRectOrigin( pos ) ] );
@@ -161,18 +168,18 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
                     Ns = NRD_FrontEnd_UnpackNormalAndRoughness( Ns, materialIDs );
 
                     // Weight
-                    float angle = Math::AcosApprox( dot( Ns.xyz, N ) );
+                    float angle = Math::AcosApproxPositive( dot( Ns.xyz, N ) );
                     float NoX = dot( Nv, Xvs );
 
-                    float w = ComputeWeight( NoX, geometryWeightParams.x, geometryWeightParams.y );
-                    w *= CompareMaterials( materialID, materialIDs, gDiffMinMaterial );
+                    float w = CompareMaterials( materialID, materialIDs, gDiffMinMaterial );
                     w *= ComputeExponentialWeight( angle, normalWeightParam, 0.0 );
-                    w = zs < gDenoisingRange ? w : 0.0; // |NoX| can be ~0 if "zs" is out of range
                     // gaussian weight is not needed
 
                     #if( REBLUR_PERFORMANCE_MODE == 0 )
                         w *= 1.0 + UnpackData1( gIn_Data1[ pos ] ).x;
                     #endif
+
+                    w = ApplyGeometryWeightLast( w, zs, NoX, geometryWeightParams );
 
                     REBLUR_TYPE s = gIn_Diff[ pos ];
                     s = Denanify( w, s );
@@ -187,6 +194,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
                     #if( NRD_MODE == SH )
                         REBLUR_SH_TYPE sh = gIn_DiffSh[ pos ];
                         sh = Denanify( w, sh );
+
                         diffSh += sh * w;
                     #endif
                 }
@@ -308,21 +316,12 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
         hitDist = saturate( hitDist / hitDistScale );
 
         // Stride between taps
-        float specStride = stride.y;
-        specStride *= lerp( 0.25 + 0.75 * Math::Sqrt01( hitDistFactor ), 1.0, specNonLinearAccumSpeed ); // "hitDistFactor" is very noisy and breaks nice patterns
-        specStride *= lerp( 0.25, 1.0, smc ); // hand tuned // TODO: use "lobeRadius"?
-        #ifdef NRD_COMPILER_DXC
-            // Adapt to neighbors if they are more stable
-            float d10 = QuadReadAcrossX( specStride );
-            float d01 = QuadReadAcrossY( specStride );
-
-            float avg = ( d10 + d01 + specStride ) / 3.0;
-            specStride = min( specStride, avg );
-        #endif
-        specStride = round( specStride );
+        stride.y *= lerp( 0.25 + 0.75 * Math::Sqrt01( hitDistFactor ), 1.0, specNonLinearAccumSpeed ); // "hitDistFactor" is very noisy and breaks nice patterns
+        stride.y *= lerp( 0.25, 1.0, smc ); // hand tuned // TODO: use "lobeRadius"?
+        stride.y = round( stride.y );
 
         // History reconstruction
-        if( specStride != 0 )
+        if( stride.y != 0 )
         {
             // Parameters
             float normalWeightParam = GetNormalWeightParam( specNonLinearAccumSpeed, gLobeAngleFraction, roughness );
@@ -355,13 +354,13 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
                         continue;
 
                     // Sample uv ( at the pixel center )
-                    float2 uv = pixelUv + float2( i, j ) * specStride * gRectSizeInv;
+                    float2 uv = pixelUv + float2( i, j ) * stride.y * gRectSizeInv;
 
                     // Apply "mirror" to not waste taps going outside of the screen
                     uv = MirrorUv( uv );
 
                     // "uv" to "pos"
-                    int2 pos = uv * gRectSize; // "uv" can't be "1"
+                    int2 pos = uv * gRectSize;
 
                     // Fetch data
                     float zs = UnpackViewZ( gIn_ViewZ[ WithRectOrigin( pos ) ] );
@@ -372,19 +371,19 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
                     Ns = NRD_FrontEnd_UnpackNormalAndRoughness( Ns, materialIDs );
 
                     // Weight
-                    float angle = Math::AcosApprox( dot( Ns.xyz, N ) );
+                    float angle = Math::AcosApproxPositive( dot( Ns.xyz, N ) );
                     float NoX = dot( Nv, Xvs );
 
-                    float w = ComputeWeight( NoX, geometryWeightParams.x, geometryWeightParams.y );
-                    w *= CompareMaterials( materialID, materialIDs, gSpecMinMaterial );
+                    float w = CompareMaterials( materialID, materialIDs, gSpecMinMaterial );
                     w *= ComputeExponentialWeight( angle, normalWeightParam, 0.0 );
                     w *= ComputeExponentialWeight( Ns.w * Ns.w, relaxedRoughnessWeightParams.x, relaxedRoughnessWeightParams.y );
-                    w = zs < gDenoisingRange ? w : 0.0; // |NoX| can be ~0 if "zs" is out of range
                     // gaussian weight is not needed
 
                     #if( REBLUR_PERFORMANCE_MODE == 0 )
                         w *= 1.0 + UnpackData1( gIn_Data1[ pos ] ).y;
                     #endif
+
+                    w = ApplyGeometryWeightLast( w, zs, NoX, geometryWeightParams );
 
                     REBLUR_TYPE s = gIn_Spec[ pos ];
                     s = Denanify( w, s );
@@ -399,6 +398,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
                     #if( NRD_MODE == SH )
                         REBLUR_SH_TYPE sh = gIn_SpecSh[ pos ];
                         sh = Denanify( w, sh );
+
                         specSh += sh * w;
                     #endif
                 }

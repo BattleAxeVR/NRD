@@ -6,7 +6,7 @@ set SDK=_NRD_SDK
 
 echo %SDK%: ROOT=%ROOT%, SELF=%SELF%
 
-rd /q /s "%SDK%"
+if exist "%SDK%" rd /q /s "%SDK%"
 
 mkdir "%SDK%\Include"
 mkdir "%SDK%\Integration"
@@ -28,3 +28,7 @@ copy "%ROOT%\_Bin\Debug\NRD.pdb" "%SDK%\Lib\Debug"
 copy "%ROOT%\_Bin\Release\NRD.dll" "%SDK%\Lib\Release"
 copy "%ROOT%\_Bin\Release\NRD.lib" "%SDK%\Lib\Release"
 copy "%ROOT%\_Bin\Release\NRD.pdb" "%SDK%\Lib\Release"
+
+if exist "_Build\_deps\nri-src\3-PrepareSDK.bat" (
+    call "_Build\_deps\nri-src\3-PrepareSDK.bat"
+)

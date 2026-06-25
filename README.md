@@ -1,4 +1,4 @@
-# NVIDIA REAL-TIME DENOISERS (NRD) v4.17.2
+# NVIDIA REAL-TIME DENOISERS (NRD) v4.17.4
 
 [![Build NRD SDK](https://github.com/NVIDIA-RTX/NRD/actions/workflows/build.yml/badge.svg)](https://github.com/NVIDIA-RTX/NRD/actions/workflows/build.yml)
 
@@ -27,9 +27,9 @@ Supported signal types:
   - Shadows with translucency
 
 Performance on RTX 4080 @ 1440p (native) with the following settings - default denoiser settings, `NormalEncoding::R10_G10_B10_A2_UNORM`, `HitDistanceReconstructionMode::AREA_3X3` (common for probabilistic lobe selection at the primary/PSR hit):
-- *REBLUR_DIFFUSE_SPECULAR* - 2.45 ms (3.35 ms in "SH" mode)
+- *REBLUR_DIFFUSE_SPECULAR* - 2.55 ms (3.40 ms in "SH" mode)
   - `enableAntifirefly = true` - +0-2% overhead
-- *RELAX_DIFFUSE_SPECULAR* - 3.15 ms (5.05 ms in "SH" mode)
+- *RELAX_DIFFUSE_SPECULAR* - 3.25 ms (4.80 ms in "SH" mode)
   - `enableAntifirefly = true` - +7-10% overhead
 - *SIGMA_SHADOW* - 0.40 ms
 - *SIGMA_SHADOW_TRANSLUCENCY* - 0.45 ms
@@ -448,11 +448,15 @@ else
 
   *NRD* computes local curvature using provided normals. Less accurate normals can lead to banding in curvature and local flatness. `RGBA8` normals is a good baseline, but `R10G10B10A10` oct-packed normals improve curvature calculations and specular tracking as the result.
 
-  If `materialID` is provided and supported by encoding, *NRD* diffuse and specular denoisers won't mix up surfaces with different material IDs.
+  If `materialID` is provided and `normalEncoding` is set to `R10_G10_B10_A2_UNORM`, *NRD* diffuse and specular denoisers won't mix up surfaces with different material IDs. The comparison formula is:
+  ```c++
+  max(m0, minMaterial) == max(m1, minMaterial)
+  ```
+  , where `minMaterial` can be different for diffuse and specular (see `minMaterialForDiffuse` and `minMaterialForSpecular` in a denoiser settings). `CommonSettings` has extra "materialID"-related features: `strandMaterialID`, `historyFixAlternatePixelStrideMaterialID` and `cameraAttachedReflectionMaterialID`.
 
 * **IN\_VIEWZ** - view-space Z coordinate of primary hits (linearized g-buffer depth)
 
-  Positive and negative values are supported. Z values in all pixels must be in the same space, matching space defined by matrices passed to NRD. If, for example, the protagonist's hands are rendered using special matrices, Z values should be computed as:
+  Positive and negative values are supported. Can't be `INF` (to avoid potential `INF - INF = NAN`). Z values in all pixels must be in the same space, matching space defined by matrices passed to NRD. If, for example, the protagonist's hands are rendered using special matrices, Z values should be computed as:
   - reconstruct world position using special matrices for "hands"
   - project on screen using matrices passed to NRD
   - `.w` component is positive view Z (or just transform world-space position to main view space and take `.z` component)
@@ -495,9 +499,9 @@ Hit distance (*REBLUR* and *RELAX*):
   - *MIS/RIS/RESTIR* require probabilities to describe "how good is the choosen ray direction for diffuse and specular lobes"
 - `hitT` can't be negative
 - `hitT` must be `0` for skipped lobe in case of probabilistic lobe selection (specular selected and diffuse skipped and vice versa)
-  - `HitDistanceReconstructionMode` must be set to something other than `OFF`, but bear in mind that the search area is limited to 3x3 (or 5x5). In other words, it's the application's responsibility to guarantee a valid sample in this area. It can be achieved by clamping probabilities and using Bayer-like dithering (see [NRD sample/clamping lobe selection probability](https://github.com/NVIDIA-RTX/NRD-Sample/blob/6f1a294333dd32dd5ea404845354d76315824add/Shaders/TraceOpaque.cs.hlsl#L223))
+  - `HitDistanceReconstructionMode` must be set to something other than `OFF`, but bear in mind that the search area is limited to 3x3 (or 5x5). In other words, it's the application's responsibility to guarantee a valid sample in this area. It can be achieved by clamping probabilities and using Bayer-like dithering (see [NRD sample/clamping lobe selection probability](https://github.com/NVIDIA-RTX/NRD-Sample/blob/4d035a59c63d55f9bb97eafce530963eda85d7bd/Shaders/TraceOpaque.cs.hlsl#L184))
   - "Pre-pass" must be enabled (i.e. `diffusePrepassBlurRadius` and `specularPrepassBlurRadius` must be non-0) to compensate entropy increase, since radiance in valid samples is divided by probability to compensate 0 values in some neighbors
-  - `hitT` should not be `0` in other cases (avoid rays pointing inside a solid surface)
+- `hitT` may be `0` for rays pointing inside the surface, *NRD* tries to ignore `0` hit distances if there is a `non-0` nearby
 - `hitT` must approach `0` at contact points
 - `hitT` must not include primary `hitT`
 - `hitT` must not be divided by *PDF* or *BRDF terms* (probability-based *acceptance/rejection* should be used instead, if needed)
@@ -572,6 +576,28 @@ where:
 
 Use `NRD.hlsli/NRD_MaterialFactors` helper to compute material demodulation factors.
 
+## INTERACTION WITH LOW DISCREPANCY SAMPLERS (BLUE NOISE)
+
+*NRD* is designed to handle "white" noise as the baseline. To suppress residual boiling with "white" noise, *NRD* history length can be bumped up to 60 frames relatively safely, if [History Confidence](#history-confidence) is provided.
+
+However, using "blue" noise can improve results by ensuring high-frequency error that is easier for spatial kernels to resolve. The only exception is *SIGMA* which works better with "blue" noise.
+
+Best practices:
+- the sequence length `spp` should ideally match or be a bit below the NRD max history length (`32 spp` is a solid baseline). Ensure that noise in the reference accumulation settles down or almost stops after `spp` frames
+- the sequence must be at least 64x64 in screen space to guarantee better spatial randomization (i.e. should be at least "2x" larger than the default blur radius)
+- Heitz’s Owen-Scrambled Sobol [LDS](https://belcour.github.io/blog/research/publication/2019/06/17/sampling-bluenoise.html) is recommended over [STBN](https://github.com/NVIDIA-RTX/STBN) at least because its memory usage doesn't depend on `spp`
+- to get unique sequences for `{pathIndex; bounceIndex; sampleIndex}`, use a global shift (e.g., `Weyl` sequence) to rotate the blue noise values (Cranley-Patterson Rotation). The shift must be constant across the screen to preserve spatial blue noise properties. Adding an offset to `pixelPos` works too. A generic advice is always to keep an eye on undesired correlations by comparing "blue" or "white" noise based reference accumulations
+- probabilistic selection of diffuse or specular lobes "pokes holes" in the temporal sequence, which can introduce directional bias. A global temporal jitter needs to be added to a Bayer-based random number. This converts static bias into high-frequency temporal variance that *NRD* can filter (see lobe selection in the [NRD sample](https://github.com/NVIDIA-RTX/NRD-Sample/blob/8de213c73abe394a94f593b18a42ca1e3a7941ce/Shaders/TraceOpaque.cs.hlsl#L189))
+
+"Blue noise" expectations:
+- no changes in areas with good sampling quality
+- reduced residual boiling in areas with acceptable sampling quality
+- static "blobs" or patterns may appear in heavily undersampled areas (since blue noise sequence has limited number of samples), they will start to shimmer under motion
+- may be helpful when *NRD* works in conjunction with upscalers (since they may amplify noise)
+- IMPORTANT: under camera or object motion, the screen-space blue noise grid effectively "scans" across the world, which naturally prevents samples from getting "stuck" but at the same time may temporarily increase variance
+
+Example: "blue" noise [implementation](https://github.com/NVIDIA-RTX/NRD-Sample/blob/dc7bd65b43aac7b5fe807ca8f3e3ab87d5e78ff2/Shaders/Include/RaytracingShared.hlsli#L676) in the NRD sample (search for `USE_BLUE_NOISE_FOR_RADIANCE` and `USE_BLUE_NOISE_FOR_SHADOWS`).
+
 ## INTERACTION WITH PRIMARY SURFACE REPLACEMENTS
 
 When denoising reflections in pure mirrors, some advantages can be reached if *NRD* "sees" the first "non-pure mirror" point after a series of pure mirror bounces (delta events). This point is called [*Primary Surface Replacement (PSR)*](https://developer.nvidia.com/blog/rendering-perfect-reflections-and-refractions-in-path-traced-games/).
@@ -610,7 +636,7 @@ IN_MV = GetMotionAt( Bvirtual );
 
 Implementation details:
 - Jumping through "delta" events [code](https://github.com/NVIDIA-RTX/NRD-Sample/blob/0e4242ef553ac66c179d975322c7d18aaa14e3b5/Shaders/TraceOpaque.cs.hlsl#L452)
-- MV calculation [code](https://github.com/NVIDIA-RTX/NRD-Sample/blob/0e4242ef553ac66c179d975322c7d18aaa14e3b5/Shaders/TraceOpaque.cs.hlsl#L509)
+- MV calculation [code](https://github.com/NVIDIA-RTX/NRD-Sample/blob/6f1a294333dd32dd5ea404845354d76315824add/Shaders/TraceOpaque.cs.hlsl#L644)
 
 ## INTERACTION WITH UPSCALING (DLSS/FSR/XESS/TAAU)
 
@@ -682,9 +708,25 @@ NRD_MaterialFactors( N, V, albedo, Rf0, roughness, diffFactor, specFactor );
 
 </details>
 
+## CAVITY SHADOW
+
+![Cavity shadows](Images/CavityShadow.jpg)
+*"Dark Souls 2: Scholar of The First Sin (DSLE mod with path tracing)"*
+
+In addition to *SG/SH* resolve and re-jittering, the cavity shadow feature can be applied on top to further enhance realism if cavity information is available. If not explicitly provided, it can be derived from a prebaked ambient occlusion map or a height map. This feature is highly recommended for parallax mapping. Shader code:
+
+```c++
+// Tunable
+const float cosLightAngle = cos( radians( 40.0 ) );
+const float shadowStrength = 0.85;
+
+diff.xyz *= NRD_ComputeCavityShadow( diffSg, N, cavity, cosLightAngle, shadowStrength );
+spec.xyz *= NRD_ComputeCavityShadow( specSg, N, cavity, cosLightAngle, shadowStrength );
+```
+
 ## INTERACTION WITH FRAME GENERATION
 
-Frame generation (FG) techniques boost FPS by interpolating between 2 last available frames. *NRD* works better when frame rate increases, because it gets more data per second. It's not the case for FG, because all rendering pipeline underlying passes (like, denoising) continue to work on the original non-boosted framerate. `GetMaxAccumulatedFrameNum` helper should get a real FPS, not a fake one.
+Frame generation (*FG*) techniques boost perceived *FPS* by generating intermediate frames. While *NRD* performs better at higher frame rates because it receives more data per second, this benefit does not apply to FG. This is because all underlying rendering pipeline passes (such as denoising) continue to operate at the original, unboosted frame rate. Consequently, the `GetMaxAccumulatedFrameNum` helper must receive the *FPS*, not the generated one. Failing to do so results in an $X$ increase in temporal lag, where $X$ is the frame rate scaling factor.
 
 ## HISTORY CONFIDENCE
 

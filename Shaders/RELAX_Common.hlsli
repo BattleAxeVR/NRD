@@ -51,9 +51,9 @@ float4 BilinearWithCustomWeightsImmediateFloat4(float4 s00, float4 s10, float4 s
     return output;
 }
 
-float4 BilinearWithCustomWeightsFloat4(Texture2D<float4> tex0, int2 position, float4 bilinearCustomWeights)
+RELAX_SH_TYPE BilinearWithCustomWeightsSH(Texture2D<RELAX_SH_TYPE> tex0, int2 position, float4 bilinearCustomWeights)
 {
-    float4 output = tex0[position] * bilinearCustomWeights.x;
+    RELAX_SH_TYPE output = tex0[position] * bilinearCustomWeights.x;
     output += tex0[position + int2(1, 0)] * bilinearCustomWeights.y;
     output += tex0[position + int2(0, 1)] * bilinearCustomWeights.z;
     output += tex0[position + int2(1, 1)] * bilinearCustomWeights.w;
@@ -145,7 +145,7 @@ float GetSpecularNormalWeight_ATrous(float2 params0, float3 n0, float3 n, float3
     float cosaN = dot(n0, n);
     float cosaV = dot(v0, v);
     float cosa = min(cosaN, cosaV);
-    float a = Math::AcosApprox(cosa);
+    float a = Math::AcosApproxPositive(cosa);
     a = Math::SmoothStep(0.0, params0.x, a);
 
     return saturate(1.0 - a * params0.y);

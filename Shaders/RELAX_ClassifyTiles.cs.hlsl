@@ -14,10 +14,12 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 #include "RELAX_Config.hlsli"
 #include "RELAX_ClassifyTiles.resources.hlsli"
 
+#include "Common.hlsli"
+
 groupshared uint s_isSky;
 
 [numthreads( 8, 4, 1 )]
-NRD_EXPORT void NRD_CS_MAIN( uint2 threadPos : SV_GroupThreadId, uint2 tilePos : SV_GroupId, uint threadIndex : SV_GroupIndex )
+NRD_EXPORT void NRD_CS_MAIN( uint2 threadPos : SV_GroupThreadID, uint2 tilePos : SV_GroupID, uint threadIndex : SV_GroupIndex )
 {
     if( threadIndex == 0 )
         s_isSky = 0;
@@ -36,7 +38,7 @@ NRD_EXPORT void NRD_CS_MAIN( uint2 threadPos : SV_GroupThreadId, uint2 tilePos :
             uint2 pos = pixelPos + uint2( i, j );
             float viewZ = abs( gIn_ViewZ[ pos ] );
 
-            isSky += viewZ > gDenoisingRange ? 1 : 0;
+            isSky += !IsInDenoisingRange( viewZ ) ? 1 : 0;
         }
     }
 

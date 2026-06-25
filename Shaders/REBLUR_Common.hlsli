@@ -53,7 +53,7 @@ float2 PackData1( float diffAccumSpeed, float specAccumSpeed )
     return r;
 }
 
-float2 UnpackData1( float2 p )
+REBLUR_DATA1_TYPE UnpackData1( float2 p )
 {
     // Allow R8_UNORM for specular only denoiser
     #if( NRD_DIFF == 0 )
@@ -267,15 +267,6 @@ float ComputeAntilag( float h, float a, float sigma, float accumSpeed )
         d = 1.0 / ( 1.0 + d * accumSpeed / magic );
     #endif
 
-    #ifdef NRD_COMPILER_DXC
-        // Adapt to neighbors if they are more stable
-        float d10 = QuadReadAcrossX( d );
-        float d01 = QuadReadAcrossY( d );
-
-        float avg = ( d10 + d01 + d ) / 3.0;
-        d = max( d, avg );
-    #endif
-
     return REBLUR_SHOW == 0 ? d : 1.0;
 }
 
@@ -335,19 +326,10 @@ float2 GetTemporalAccumulationParams( float isInScreenMulFootprintQuality, float
 
 // Filtering
 
-void BicubicFilterNoCornersWithFallbackToBilinearFilterWithCustomWeights1(
-    float2 samplePos, float2 invResourceSize,
-    float4 bilinearCustomWeights, bool useBicubic,
-    Texture2D<float> tex0, out float c0 ) // CatRom
-{
-    _BicubicFilterNoCornersWithFallbackToBilinearFilterWithCustomWeights_Init;
-    _BicubicFilterNoCornersWithFallbackToBilinearFilterWithCustomWeights_Color( c0, tex0 );
-}
-
 void BicubicFilterNoCornersWithFallbackToBilinearFilterWithCustomWeights(
     float2 samplePos, float2 invResourceSize,
     float4 bilinearCustomWeights, bool useBicubic,
-    Texture2D<REBLUR_TYPE> tex0, out REBLUR_TYPE c0 ) // CatRom
+    Texture2D<float> tex0, out float c0 ) // CatRom
 {
     _BicubicFilterNoCornersWithFallbackToBilinearFilterWithCustomWeights_Init;
     _BicubicFilterNoCornersWithFallbackToBilinearFilterWithCustomWeights_Color( c0, tex0 );

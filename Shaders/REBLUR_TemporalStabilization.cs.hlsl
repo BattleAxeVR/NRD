@@ -29,12 +29,12 @@ void Preload( uint2 sharedPos, int2 globalPos )
 
     #if( NRD_DIFF )
         float diffLuma = GetLuma( gIn_Diff[ globalPos ] );
-        s_DiffLuma[ sharedPos.y ][ sharedPos.x ] = viewZ > gDenoisingRange ? REBLUR_INVALID : diffLuma;
+        s_DiffLuma[ sharedPos.y ][ sharedPos.x ] = !IsInDenoisingRange( viewZ ) ? REBLUR_INVALID : diffLuma;
     #endif
 
     #if( NRD_SPEC )
         float specLuma = GetLuma( gIn_Spec[ globalPos ] );
-        s_SpecLuma[ sharedPos.y ][ sharedPos.x ] = viewZ > gDenoisingRange ? REBLUR_INVALID : specLuma;
+        s_SpecLuma[ sharedPos.y ][ sharedPos.x ] = !IsInDenoisingRange( viewZ ) ? REBLUR_INVALID : specLuma;
     #endif
 }
 
@@ -53,8 +53,8 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 
     // Early out
     float viewZ = UnpackViewZ( gIn_ViewZ[ WithRectOrigin( pixelPos ) ] );
-    if( viewZ > gDenoisingRange )
-        return; // IMPORTANT: no data output, must be rejected by the "viewZ" check!
+    if( !IsInDenoisingRange( viewZ ) )
+        return;
 
     // Position
     float2 pixelUv = float2( pixelPos + 0.5 ) * gRectSizeInv;
@@ -144,7 +144,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
         // Sample history
         float diffLumaHistory;
 
-        BicubicFilterNoCornersWithFallbackToBilinearFilterWithCustomWeights1(
+        BicubicFilterNoCornersWithFallbackToBilinearFilterWithCustomWeights(
             saturate( smbPixelUv ) * gRectSizePrev, gResourceSizeInvPrev,
             smbOcclusionWeights, smbAllowCatRom,
             gHistory_DiffLumaStabilized, diffLumaHistory
@@ -154,7 +154,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
         diffLumaHistory = max( diffLumaHistory, 0.0 );
 
         // Compute antilag
-        float diffAntilag = ComputeAntilag( diffLumaHistory, diffLumaM1, diffLumaSigma, smbFootprintQuality * data1.x );
+        float diffAntilag = ComputeAntilag( diffLumaHistory, diffLumaM1, diffLumaSigma, smbFootprintQuality * data1.x ); // TODO: ideally averaging is needed
 
         float diffMinAccumSpeed = min( data1.x, gHistoryFixFrameNum ) * REBLUR_USE_ANTILAG_NOT_INVOKING_HISTORY_FIX;
         data1.x = lerp( diffMinAccumSpeed, data1.x, diffAntilag );
@@ -257,7 +257,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 
         float specLumaHistory;
 
-        BicubicFilterNoCornersWithFallbackToBilinearFilterWithCustomWeights1(
+        BicubicFilterNoCornersWithFallbackToBilinearFilterWithCustomWeights(
             saturate( uv ) * gRectSizePrev, gResourceSizeInvPrev,
             occlusionWeights, allowCatRom,
             gHistory_SpecLumaStabilized, specLumaHistory
@@ -268,7 +268,8 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 
         // Compute antilag
         float footprintQuality = lerp( smbFootprintQuality, vmbFootprintQuality, virtualHistoryAmount );
-        float specAntilag = ComputeAntilag( specLumaHistory, specLumaM1, specLumaSigma, footprintQuality * data1.y );
+
+        float specAntilag = ComputeAntilag( specLumaHistory, specLumaM1, specLumaSigma, footprintQuality * data1.y );  // TODO: ideally averaging is needed
 
         float specMinAccumSpeed = min( data1.y, gHistoryFixFrameNum ) * REBLUR_USE_ANTILAG_NOT_INVOKING_HISTORY_FIX;
         data1.y = lerp( specMinAccumSpeed, data1.y, specAntilag );

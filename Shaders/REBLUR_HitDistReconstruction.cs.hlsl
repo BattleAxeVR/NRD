@@ -47,7 +47,7 @@ void Preload( uint2 sharedPos, int2 globalPos )
         #endif
     #endif
 
-    s_HitDist_ViewZ[ sharedPos.y ][ sharedPos.x ] = float3( hitDist, viewZ );
+    s_HitDist_ViewZ[ sharedPos.y ][ sharedPos.x ] = float3( !IsInDenoisingRange( viewZ ) ? 0.0 : hitDist, viewZ );
 }
 
 [numthreads( GROUP_X, GROUP_Y, 1 )]
@@ -66,7 +66,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     // Early out
     int2 smemPos = threadPos + NRD_BORDER;
     float3 center = s_HitDist_ViewZ[ smemPos.y ][ smemPos.x ];
-    if( center.z > gDenoisingRange )
+    if( !IsInDenoisingRange( center.z ) )
         return;
 
     // Center data
@@ -113,14 +113,13 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
             float NoX = dot( Nv, Xvs );
 
             w *= ComputeWeight( NoX, geometryWeightParams.x, geometryWeightParams.y );
-            w = data.z < gDenoisingRange ? w : 0.0; // |NoX| can be ~0 if "data.z" is out of range
 
             float2 ww = w;
             #if( REBLUR_PERFORMANCE_MODE == 0 )
                 float4 normalAndRoughness = s_Normal_Roughness[ pos.y ][ pos.x ];
 
                 float cosa = dot( N, normalAndRoughness.xyz );
-                float angle = Math::AcosApprox( cosa );
+                float angle = Math::AcosApproxPositive( cosa );
 
                 // These weights have infinite exponential tails, because with strict weights we are reducing a chance to find a valid sample in 3x3 or 5x5 area
                 ww.x *= ComputeExponentialWeight( angle, diffNormalWeightParam, 0.0 );
@@ -128,9 +127,9 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
                 ww.y *= ComputeExponentialWeight( normalAndRoughness.w * normalAndRoughness.w, relaxedRoughnessWeightParams.x, relaxedRoughnessWeightParams.y );
             #endif
 
-            data.x = Denanify( ww.x, data.x );
-            data.y = Denanify( ww.y, data.y );
-            ww *= float2( data.xy != 0.0 );
+            // Ignore "no data"
+            ww.x = data.x == 0.0 ? 0.0 : ww.x;
+            ww.y = data.y == 0.0 ? 0.0 : ww.y;
 
             // Accumulate
             center.xy += data.xy * ww;
