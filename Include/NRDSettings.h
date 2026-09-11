@@ -11,7 +11,7 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 #pragma once
 
 #define NRD_SETTINGS_VERSION_MAJOR 4
-#define NRD_SETTINGS_VERSION_MINOR 17
+#define NRD_SETTINGS_VERSION_MINOR 18
 
 static_assert(NRD_VERSION_MAJOR == NRD_SETTINGS_VERSION_MAJOR && NRD_VERSION_MINOR == NRD_SETTINGS_VERSION_MINOR, "Please, update all NRD SDK files");
 
@@ -21,13 +21,20 @@ namespace nrd
     // COMMON
     //====================================================================================================================================================
 
-    // IMPORTANT: despite that all NRD accumulation related settings are measured in "frames" (for simplicity), it's recommended to recalculate the
-    // number of accumulated frames from the accumulation time (in seconds). It allows to minimize lags if FPS is low and maximize IQ if FPS is high.
-    // All default values provided for 60 FPS. Each denoiser has a recommended accumulation time constant and absolute maximum of accumulated frames
-    // to clamp to:
-    inline uint32_t GetMaxAccumulatedFrameNum(float accumulationTime, float fps)
+    // IMPORTANT: Although all NRD accumulation-related settings are expressed in frames for simplicity, it is recommended to make the accumulated
+    // frame count FPS-dependent. This minimizes lag at low FPS and maximizes IQ at high FPS. All default values assume 60 FPS. Each denoiser has a
+    // recommended accumulation time (in seconds) and an absolute maximum accumulated frame count; clamp the calculated value to this maximum. The
+    // FPS passed to this function must be low pass filtered to reduce reactions to transient drops (stutters). Without filtering, a momentary
+    // 60 => 30 => 60 FPS change with a 0.5-second accumulation time changes the limit from 30 => 15 => 30 frames. When the limit returns to 30,
+    // the history contains only 15 frames and needs time to rebuild. The following implements an approximately FPS-independent low pass filter with
+    // a 0.2-second time constant. Both frame-time variables are in milliseconds. "m_VerySmoothedFrameTime" must be initialized to a positive value:
+    //    float smoothedFPSprev = 1000.0f / m_VerySmoothedFrameTime;
+    //    float n = smoothedFPSprev * 0.2f;
+    //    m_VerySmoothedFrameTime = m_VerySmoothedFrameTime + (frameTime - m_VerySmoothedFrameTime) / (1.0f + n);
+    //    float smoothedFPS = 1000.0f / m_VerySmoothedFrameTime;
+    inline uint32_t GetMaxAccumulatedFrameNum(float accumulationTime, float smoothedFPS)
     {
-        return (uint32_t)(accumulationTime * fps + 0.5f);
+        return (uint32_t)(accumulationTime * smoothedFPS + 0.5f);
     }
 
     // Sequence is based on "CommonSettings::frameIndex":
@@ -39,7 +46,7 @@ namespace nrd
     // Notes:
     //  - if checkerboarding is enabled, "mode" defines the orientation of even numbered frames
     //  - all inputs must have the same resolution - logical FULL resolution
-    //  - noisy input signals ("IN_DIFF_XXX / IN_SPEC_XXX") are tightly packed to the LEFT HALF of the texture (the input pixel = 2x1 screen pixel)
+    //  - noisy input signals ("IN_DIFF_XXX", "IN_SPEC_XXX", "IN_PENUMBRA" and "IN_TRANSLUCENCY") are tightly packed to the LEFT HALF of the texture (the input pixel = 2x1 screen pixel)
     //  - for others the input pixel = 1x1 screen pixel
     //  - upsampling is handled internally in checkerboard mode
     enum class CheckerboardMode : uint8_t
@@ -109,9 +116,10 @@ namespace nrd
             0.0f, 0.0f, 0.0f, 1.0f
         };
 
-        // Used as "mv = IN_MV * motionVectorScale" (use .z = 0 for 2D screen-space motion)
+        // Used as "mv = IN_MV * motionVectorScale + motionVectorBias" (use .z = 0 for 2D screen-space motion)
         // Expected usage: "pixelUvPrev = pixelUv + mv.xy" (where "pixelUv" is in (0; 1) range)
         float motionVectorScale[3] = {1.0f, 1.0f, 0.0f};
+        float motionVectorBias[3] = {}; // can be used for de-jittering
 
         // [-0.5; 0.5] - sampleUv = pixelUv + cameraJitter
         float cameraJitter[2] = {};
@@ -126,7 +134,8 @@ namespace nrd
         // (>0) - "viewZ = IN_VIEWZ * viewZScale" (mostly for FP16 viewZ)
         float viewZScale = 1.0f;
 
-        // (Optional) (ms) - user provided if > 0, otherwise - tracked internally
+        // (Optional) (ms) - immediate and unfiltered previous frame time
+        // User provided if > 0, otherwise - tracked internally
         float timeDeltaBetweenFrames = 0.0f;
 
         // (units > 0) - use TLAS or tracing range
@@ -142,9 +151,10 @@ namespace nrd
         // - "IN_DISOCCLUSION_THRESHOLD_MIX" texture, if "isDisocclusionThresholdMixAvailable = true" (has higher priority and ignores "strandMaterialID")
         float disocclusionThresholdAlternate = 0.05f;
 
-        // (Optional) (>=0) - marks reflections of camera attached objects (requires "NormalEncoding::R10_G10_B10_A2_UNORM")
-        // This material ID marks reflections of objects attached to the camera, not objects themselves. Unfortunately, this is only an improvement
-        // for critical cases, but not a generic solution. A generic solution requires reflection MVs, which NRD currently doesn't ask for
+        // (Optional) (>=0) - marks mirror self-reflections of camera attached objects (requires "NormalEncoding::R10_G10_B10_A2_UNORM")
+        // This material ID can also mark camera attached objects themselves, even with self motion, if surface motion is expected to work better
+        // than virtual motion computed for the static world. This is not a generic solution: correct tracking requires specular MVs, which are
+        // hard to compute and are not currently requested by NRD
         float cameraAttachedReflectionMaterialID = 999.0f;
 
         // (Optional) (>=0) - marks hair (grass) geometry to enable "under-the-hood" tweaks (requires "NormalEncoding::R10_G10_B10_A2_UNORM")
@@ -164,23 +174,27 @@ namespace nrd
         uint16_t printfAt[2] = {9999, 9999}; // thread (pixel) position
         float debug = 0.0f;
 
-        // (Optional) (pixels) - viewport origin
-        // IMPORTANT: gets applied only to non-noisy guides (aka g-buffer):
-        // - excluding: "IN_DIFF_CONFIDENCE", "IN_SPEC_CONFIDENCE" and "IN_DISOCCLUSION_THRESHOLD_MIX"
+        // (Optional) (pixels) - input viewport origin
+        // Applied to "IN_" resources, excluding: "IN_DIFF_CONFIDENCE", "IN_SPEC_CONFIDENCE" and "IN_DISOCCLUSION_THRESHOLD_MIX"
         // Used only if "NRD_SUPPORTS_VIEWPORT_OFFSET = 1"
-        uint32_t rectOrigin[2] = {};
+        uint32_t inputRectOrigin[2] = {};
+
+        // (Optional) (pixels) - output viewport origin, changing it assumes "CLEAR_AND_RESTART"
+        // Applied to all "OUT_" resources and resources from "PERMANENT_POOL" on both reads and writes
+        // Used only if "NRD_SUPPORTS_VIEWPORT_OFFSET = 1"
+        uint32_t outputRectOrigin[2] = {};
 
         // A consecutively growing number. Valid usage:
-        // - must be incremented by 1 on each frame (not by 1 on each "SetCommonSettings" call)
-        // - sequence can be restarted after passing "AccumulationMode != CONTINUE"
+        // - must be incremented by 1 on each frame, not on each "SetCommonSettings" call
         // - must be in sync with "CheckerboardMode" (if not OFF)
+        // - may be restarted after setting "accumulationMode != AccumulationMode::CONTINUE"
         uint32_t frameIndex = 0;
 
         // To reset history set to RESTART or CLEAR_AND_RESTART for one frame
         AccumulationMode accumulationMode = AccumulationMode::CONTINUE;
 
-        // If "true" "IN_MV" is 3D motion in world-space (0 should be everywhere if the scene is static, camera motion must not be included),
-        // otherwise it's 2D (+ optional Z delta) screen-space motion (0 should be everywhere if the camera doesn't move)
+        // If "true" the resulting motion after scaling and bias is 3D motion in world-space (0 should be everywhere if the scene is static,
+        // camera motion must not be included), otherwise it's 2D (+ optional Z delta) screen-space motion (0 should be everywhere if the camera doesn't move)
         bool isMotionVectorInWorldSpace = false;
 
         // If "true" "IN_DIFF_CONFIDENCE" and "IN_SPEC_CONFIDENCE" are available
@@ -189,7 +203,7 @@ namespace nrd
         // If "true" "IN_DISOCCLUSION_THRESHOLD_MIX" is available
         bool isDisocclusionThresholdMixAvailable = false;
 
-        // Enables debug overlay in OUT_VALIDATION
+        // Enables REBLUR / RELAX debug overlay (see "ResourceType::OUT_VALIDATION")
         bool enableValidation = false;
     };
 
@@ -471,6 +485,9 @@ namespace nrd
         // 0 - disables the stabilization pass
         // Always accumulate in "seconds" not in "frames", use "GetMaxAccumulatedFrameNum" for conversion
         uint32_t maxStabilizedFrameNum = 5;
+
+        // Defines the orientation of valid input samples. Used only if "NRD_SUPPORTS_CHECKERBOARD = 1"
+        CheckerboardMode checkerboardMode = CheckerboardMode::OFF;
     };
 
     //====================================================================================================================================================

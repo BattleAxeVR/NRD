@@ -23,12 +23,15 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 {
     NRD_CTA_ORDER_REVERSED;
 
+    if( any( pixelPos >= gRectSize ) )
+        return;
+
     // TODO: introduce "CopyResource" in NRD API?
-#if( NRD_SPEC )
-    gOut_Spec[pixelPos.xy] = gIn_Spec[pixelPos.xy];
+#if( NRD_HAS_SPEC )
+    NRD_SURFACE( gOut_Spec, pixelPos ) = NRD_SURFACE( gIn_Spec, pixelPos );
 #endif
 
-#if( NRD_DIFF )
-    gOut_Diff[pixelPos.xy] = gIn_Diff[pixelPos.xy];
+#if( NRD_HAS_DIFF )
+    NRD_SURFACE( gOut_Diff, pixelPos ) = NRD_SURFACE( gIn_Diff, pixelPos );
 #endif
 }

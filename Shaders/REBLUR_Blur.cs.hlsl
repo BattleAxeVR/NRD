@@ -24,19 +24,22 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     NRD_CTA_ORDER_DEFAULT;
 
     // Copy viewZ ( including sky! ) for the next pass and frame ( potentially lower precision )
-    float viewZpacked = gIn_ViewZ[ WithRectOrigin( pixelPos ) ];
+    bool isInRect = all( pixelPos <= gRectSizeMinusOne );
+    int2 clampedPixelPos = min( pixelPos, gRectSizeMinusOne );
+    float viewZpacked = NRD_SURFACE( gIn_ViewZ, clampedPixelPos );
 
     #if( REBLUR_COPY_GBUFFER == 1 )
-        gOut_ViewZ[ pixelPos ] = viewZpacked;
+        if( isInRect )
+            NRD_SURFACE( gOut_ViewZ, pixelPos ) = viewZpacked;
     #endif
 
     // Tile-based early out ( quad uniform )
-    float isSky = gIn_Tiles[ pixelPos >> 4 ].x;
+    float isSky = NRD_SURFACE( gIn_Tiles, pixelPos >> 4 ).x;
     if( isSky != 0.0 )
         return;
 
     // Non-linear accum speed
-    REBLUR_DATA1_TYPE data1 = UnpackData1( gIn_Data1[ pixelPos ] );
+    REBLUR_DATA1_TYPE data1 = UnpackData1( NRD_SURFACE( gIn_Data1, clampedPixelPos ) );
 
     REBLUR_DATA1_TYPE nonLinearAccumSpeed;
     nonLinearAccumSpeed.x = GetAdvancedNonLinearAccumSpeed( data1.x );
@@ -58,12 +61,12 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     #endif
 
     // Early out ( thread )
-    if( !IsInDenoisingRange( viewZ ) || any( pixelPos > gRectSizeMinusOne ) )
+    if( !IsInDenoisingRange( viewZ ) || !isInRect )
         return;
 
     // Center data
     float materialID;
-    float4 normalAndRoughness = NRD_FrontEnd_UnpackNormalAndRoughness( gIn_Normal_Roughness[ WithRectOrigin( pixelPos ) ], materialID );
+    float4 normalAndRoughness = NRD_FrontEnd_UnpackNormalAndRoughness( NRD_SURFACE( gIn_Normal_Roughness, pixelPos ), materialID );
     float3 N = normalAndRoughness.xyz;
     float3 Nv = Geometry::RotateVectorInverse( gViewToWorld, N );
     float roughness = normalAndRoughness.w;
@@ -80,12 +83,12 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     // Spatial filtering
     #define REBLUR_SPATIAL_PASS REBLUR_BLUR
 
-    #if( NRD_DIFF )
+    #if( NRD_HAS_DIFF )
         #define REBLUR_SPATIAL_LOBE REBLUR_DIFF
         #include "REBLUR_Common_SpatialFilter.hlsli"
     #endif
 
-    #if( NRD_SPEC )
+    #if( NRD_HAS_SPEC )
         #define REBLUR_SPATIAL_LOBE REBLUR_SPEC
         #include "REBLUR_Common_SpatialFilter.hlsli"
     #endif

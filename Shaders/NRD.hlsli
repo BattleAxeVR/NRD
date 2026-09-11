@@ -8,7 +8,7 @@ distribution of this software and related documentation without an express
 license agreement from NVIDIA CORPORATION is strictly prohibited.
 */
 
-// NRD v4.17
+// NRD v4.18
 
 // IMPORTANT: DO NOT MODIFY THIS FILE WITHOUT FULL RECOMPILATION OF NRD LIBRARY!
 
@@ -116,6 +116,7 @@ NOISY INPUTS:
 #define NRD_MERGE_TOKENS( _0, _1 )                                                      NRD_MERGE_TOKENS_( _0, _1 )
 
 // Custom engine that defined all the macros
+// IMPORTANT: NRD_INPUT and NRD_OUTPUT must accept "policy" as the last argument and invoke NRD_DECLARE_RESOURCE
 #if( defined( NRD_CONSTANTS_START ) && \
      defined( NRD_CONSTANT ) && \
      defined( NRD_CONSTANTS_END ) && \
@@ -146,15 +147,15 @@ NOISY INPUTS:
     #define NRD_CONSTANTS_END                                                           };
 
     #define NRD_INPUTS_START
-    #define NRD_INPUT( resourceType, dataType, resourceName, regName, bindingIndex )    resourceType<dataType> resourceName : register( NRD_MERGE_TOKENS( regName, bindingIndex ), NRD_MERGE_TOKENS( space, NRD_RESOURCES_SPACE_INDEX ) );
+    #define NRD_INPUT( type, dataType, name, reg, binding, policy )                     type<dataType> name : register( NRD_MERGE_TOKENS( reg, binding ), NRD_MERGE_TOKENS( space, NRD_RESOURCES_SPACE_INDEX ) ); NRD_DECLARE_RESOURCE( name, policy )
     #define NRD_INPUTS_END
 
     #define NRD_OUTPUTS_START
-    #define NRD_OUTPUT( resourceType, dataType, resourceName, regName, bindingIndex )   NRD_FORMAT_UNKNOWN resourceType<dataType> resourceName : register( NRD_MERGE_TOKENS( regName, bindingIndex ), NRD_MERGE_TOKENS( space, NRD_RESOURCES_SPACE_INDEX ) );
+    #define NRD_OUTPUT( type, dataType, name, reg, binding, policy )                    NRD_FORMAT_UNKNOWN type<dataType> name : register( NRD_MERGE_TOKENS( reg, binding ), NRD_MERGE_TOKENS( space, NRD_RESOURCES_SPACE_INDEX ) ); NRD_DECLARE_RESOURCE( name, policy )
     #define NRD_OUTPUTS_END
 
     #define NRD_SAMPLERS_START
-    #define NRD_SAMPLER( resourceType, resourceName, regName, bindingIndex )            resourceType resourceName : register( NRD_MERGE_TOKENS( regName, bindingIndex ), NRD_MERGE_TOKENS( space, NRD_CONSTANT_BUFFER_AND_SAMPLERS_SPACE_INDEX ) );
+    #define NRD_SAMPLER( type, name, reg, binding )                                     type name : register( NRD_MERGE_TOKENS( reg, binding ), NRD_MERGE_TOKENS( space, NRD_CONSTANT_BUFFER_AND_SAMPLERS_SPACE_INDEX ) );
     #define NRD_SAMPLERS_END
 
     #define NRD_EXPORT
@@ -181,15 +182,15 @@ NOISY INPUTS:
     #define NRD_CONSTANTS_END                                                           };
 
     #define NRD_INPUTS_START
-    #define NRD_INPUT( resourceType, dataType, resourceName, regName, bindingIndex )    resourceType<dataType> resourceName : register( NRD_MERGE_TOKENS( regName, bindingIndex ) );
+    #define NRD_INPUT( type, dataType, name, reg, binding, policy )                     type<dataType> name : register( NRD_MERGE_TOKENS( reg, binding ) ); NRD_DECLARE_RESOURCE( name, policy )
     #define NRD_INPUTS_END
 
     #define NRD_OUTPUTS_START
-    #define NRD_OUTPUT( resourceType, dataType, resourceName, regName, bindingIndex )   resourceType<dataType> resourceName : register( NRD_MERGE_TOKENS( regName, bindingIndex ) );
+    #define NRD_OUTPUT( type, dataType, name, reg, binding, policy )                    type<dataType> name : register( NRD_MERGE_TOKENS( reg, binding ) ); NRD_DECLARE_RESOURCE( name, policy )
     #define NRD_OUTPUTS_END
 
     #define NRD_SAMPLERS_START
-    #define NRD_SAMPLER( resourceType, resourceName, regName, bindingIndex )            resourceType resourceName : register( NRD_MERGE_TOKENS( regName, bindingIndex ) );
+    #define NRD_SAMPLER( type, name, reg, binding )                                     type name : register( NRD_MERGE_TOKENS( reg, binding ) );
     #define NRD_SAMPLERS_END
 
     #define numthreads                                                                  NUM_THREADS
@@ -228,15 +229,15 @@ NOISY INPUTS:
     #define NRD_CONSTANTS_END
 
     #define NRD_INPUTS_START
-    #define NRD_INPUT( resourceType, dataType, resourceName, regName, bindingIndex )    resourceType<dataType> resourceName;
+    #define NRD_INPUT( type, dataType, name, reg, binding, policy )                     type<dataType> name; NRD_DECLARE_RESOURCE( name, policy )
     #define NRD_INPUTS_END
 
     #define NRD_OUTPUTS_START
-    #define NRD_OUTPUT( resourceType, dataType, resourceName, regName, bindingIndex )   resourceType<dataType> resourceName;
+    #define NRD_OUTPUT( type, dataType, name, reg, binding, policy )                    type<dataType> name; NRD_DECLARE_RESOURCE( name, policy )
     #define NRD_OUTPUTS_END
 
     #define NRD_SAMPLERS_START
-    #define NRD_SAMPLER( resourceType, resourceName, regName, bindingIndex )            resourceType resourceName;
+    #define NRD_SAMPLER( type, name, reg, binding )                                     type name;
     #define NRD_SAMPLERS_END
 
     #define NRD_EXPORT
@@ -249,15 +250,15 @@ NOISY INPUTS:
     #define NRD_CONSTANTS_END                                                           };
 
     #define NRD_INPUTS_START
-    #define NRD_INPUT( resourceType, dataType, resourceName, regName, bindingIndex )    resourceType<dataType> resourceName : register( NRD_MERGE_TOKENS( regName, bindingIndex ) );
+    #define NRD_INPUT( type, dataType, name, reg, binding, policy )                     type<dataType> name : register( NRD_MERGE_TOKENS( reg, binding ) ); NRD_DECLARE_RESOURCE( name, policy )
     #define NRD_INPUTS_END
 
     #define NRD_OUTPUTS_START
-    #define NRD_OUTPUT( resourceType, dataType, resourceName, regName, bindingIndex )   resourceType<dataType> resourceName : register( NRD_MERGE_TOKENS( regName, bindingIndex ) );
+    #define NRD_OUTPUT( type, dataType, name, reg, binding, policy )                    type<dataType> name : register( NRD_MERGE_TOKENS( reg, binding ) ); NRD_DECLARE_RESOURCE( name, policy )
     #define NRD_OUTPUTS_END
 
     #define NRD_SAMPLERS_START
-    #define NRD_SAMPLER( resourceType, resourceName, regName, bindingIndex )            resourceType resourceName : register( NRD_MERGE_TOKENS( regName, bindingIndex ) );
+    #define NRD_SAMPLER( type, name, reg, binding )                                     type name : register( NRD_MERGE_TOKENS( reg, binding ) );
     #define NRD_SAMPLERS_END
 
     #define NRD_EXPORT
@@ -309,10 +310,7 @@ NOISY INPUTS:
         #define rcp( x )                                                                ( 1.0 / ( x ) )
     #endif
     #ifndef any
-        bool any( bool value )
-        {
-            return value;
-        }
+        bool any( bool value )                                                          { return value; }
     #endif
 #endif
 
@@ -322,21 +320,50 @@ NOISY INPUTS:
 
 // Defined in CMake
 #ifdef NRD_INTERNAL
+    // Resource coordinate policy
+    #if( NRD_SUPPORTS_VIEWPORT_OFFSET == 1 )
+        #define NRD_RESOURCE_TRANSIENT                                                  int2( 0, 0 )
+        #define NRD_RESOURCE_IN_ZERO_OFFSET                                             int2( 0, 0 )
+        #define NRD_RESOURCE_IN                                                         gInputRectOrigin
+        #define NRD_RESOURCE_OUT                                                        gOutputRectOrigin
+        #define NRD_RESOURCE_PERMANENT                                                  gOutputRectOrigin
+        #define NRD_RESOURCE_IN_DISPATCH                                                gDispatchInputRectOrigin
+        #define NRD_RESOURCE_OUT_DISPATCH                                               gDispatchOutputRectOrigin
+
+        #define NRD_DECLARE_RESOURCE( resourceName, resourcePolicy )                    int2 NRD_MERGE_TOKENS( GetResourceOrigin_, resourceName )( ) { return resourcePolicy; }
+        #define NRD_PIXEL_POS( resourceName, pos )                                      ( ( pos ) + NRD_MERGE_TOKENS( GetResourceOrigin_, resourceName )() )
+    #else
+        #define NRD_RESOURCE_TRANSIENT                                                  0
+        #define NRD_RESOURCE_IN_ZERO_OFFSET                                             0
+        #define NRD_RESOURCE_IN                                                         0
+        #define NRD_RESOURCE_OUT                                                        0
+        #define NRD_RESOURCE_PERMANENT                                                  0
+        #define NRD_RESOURCE_IN_DISPATCH                                                0
+        #define NRD_RESOURCE_OUT_DISPATCH                                               0
+
+        #define NRD_DECLARE_RESOURCE( resourceName, resourcePolicy )
+        #define NRD_PIXEL_POS( resourceName, pos )                                      ( pos )
+    #endif
+
+    #define NRD_SURFACE( resourceName, pos )                                            resourceName[ NRD_PIXEL_POS( resourceName, pos ) ]
+
     // Explicitly set matrix layout for shader compilation outside of NRD environment
     #pragma pack_matrix( column_major )
+#endif
 
-    // Permutations
-    #define RADIANCE                                                                    0 // normal mode
-    #define SH                                                                          1 // spherical harmonics ( gaussian )
-    #define OCCLUSION                                                                   2
-    #define DO                                                                          3 // directional occlusion
+// Permutations
+#ifndef __cplusplus
+    #define NRD_MODE_RADIANCE                                                           0 // normal mode
+    #define NRD_MODE_SH                                                                 1 // spherical harmonics ( gaussian )
+    #define NRD_MODE_OCCLUSION                                                          2
+    #define NRD_MODE_DO                                                                 3 // directional occlusion
 
-    #define DIFF                                                                        0x1 // diffuse
-    #define SPEC                                                                        0x2 // specular
-    #define BOTH                                                                        ( DIFF | SPEC )
+    #define NRD_SIGNAL_DIFF                                                             0x1 // diffuse
+    #define NRD_SIGNAL_SPEC                                                             0x2 // specular
+    #define NRD_SIGNAL_BOTH                                                             ( NRD_SIGNAL_DIFF | NRD_SIGNAL_SPEC )
 
-    #define NRD_DIFF                                                                    ( ( NRD_SIGNAL & DIFF ) != 0 )
-    #define NRD_SPEC                                                                    ( ( NRD_SIGNAL & SPEC ) != 0 )
+    #define NRD_HAS_DIFF                                                                ( ( NRD_SIGNAL & NRD_SIGNAL_DIFF ) != 0 )
+    #define NRD_HAS_SPEC                                                                ( ( NRD_SIGNAL & NRD_SIGNAL_SPEC ) != 0 )
 #endif
 
 // Normal encoding variants ( match NormalEncoding )
@@ -1140,7 +1167,10 @@ float2 NRD_SG_ReJitter(
     float3 Ls = NRD_SG_ExtractDirection( specSg );
 
     // Fix instabilities
-    Ls = normalize( lerp( V, Ls, roughness ) );
+    // TODO: compared with linear roughness, "smc" keeps near-mirror directions closer to "V" but moves toward "Ls" faster otherwise,
+    // reducing bias at the cost of greater sensitivity to potentially unstable "Ls"
+    float smc = _NRD_GetSpecMagicCurve( roughness, 0.5 );
+    Ls = normalize( lerp( V, Ls, smc ) );
 
     // BRDF at center
     float2 brdfCenter = _NRD_ComputeBrdfs( Ld, Ls, N, V, roughness );
@@ -1156,10 +1186,21 @@ float2 NRD_SG_ReJitter(
     float2 j = ( brdfCenter + NRD_EPS ) / ( brdfAverage + NRD_EPS );
     j = clamp( j, 1.0 / NRD_REJITTER_AMPLITUDE, NRD_REJITTER_AMPLITUDE );
 
-    // Z weights
+    // Z weights to avoid ringing on geometry edges
     float NoV = abs( dot( N, V ) );
     float zThreshold = NRD_REJITTER_VIEWZ_THRESHOLD * abs( Z ) / ( NoV * 0.95 + 0.05 );
     float4 w = step( abs( float4( Ze, Zw, Zn, Zs ) - Z ), zThreshold.xxxx );
+
+    // Normal weights to avoid ringing on hard normal edges
+    float4 NoN;
+    NoN.x = dot( Ne, N );
+    NoN.y = dot( Nw, N );
+    NoN.z = dot( Nn, N );
+    NoN.w = dot( Ns, N );
+
+    w *= step( 0.01, NoN );
+
+    // Result
     bool isSymmetrical = dot( w, float4( 1.0, 1.0, 1.0, 1.0 ) ) > 3.5;
 
     return isSymmetrical ? j : float2( 1.0, 1.0 );

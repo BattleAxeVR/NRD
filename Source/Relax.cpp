@@ -46,7 +46,7 @@ constexpr uint32_t RELAX_MAX_ATROUS_PASS_NUM = 8;
         PushInput(AsUint(Transient::HISTORY_LENGTH)); \
         PushOutput(AsUint(ResourceType::OUT_VALIDATION)); \
         std::array<ShaderMake::ShaderConstant, 0> defines = {}; \
-        AddDispatchWithArgs(RELAX_Validation, defines, IGNORE_RS, 1); \
+        AddDispatch(RELAX_Validation, defines); \
     }
 
 inline float3 RELAX_GetFrustumForward(const float4x4& viewToWorld, const float4& frustum) {
@@ -111,16 +111,19 @@ void nrd::InstanceImpl::AddSharedConstants_Relax(const RelaxSettings& settings, 
     consts->gPrevFrustumForward = float4(prevFrustumForward, 0.0f);
     consts->gCameraDelta = float4(m_CameraDelta, 0.0f);
     consts->gMvScale = float4(m_CommonSettings.motionVectorScale[0], m_CommonSettings.motionVectorScale[1], m_CommonSettings.motionVectorScale[2], m_CommonSettings.isMotionVectorInWorldSpace ? 1.0f : 0.0f);
+    consts->gMvBias = float4(m_CommonSettings.motionVectorBias[0], m_CommonSettings.motionVectorBias[1], m_CommonSettings.motionVectorBias[2], 0.0f);
     consts->gJitter = float2(m_CommonSettings.cameraJitter[0], m_CommonSettings.cameraJitter[1]);
     consts->gResolutionScale = float2(float(rectW) / float(resourceW), float(rectH) / float(resourceH));
-    consts->gRectOffset = float2(float(m_CommonSettings.rectOrigin[0]) / float(resourceW), float(m_CommonSettings.rectOrigin[1]) / float(resourceH));
     consts->gResourceSizeInv = float2(1.0f / resourceW, 1.0f / resourceH);
     consts->gResourceSize = float2(resourceW, resourceH);
     consts->gRectSizeInv = float2(1.0f / rectW, 1.0f / rectH);
     consts->gRectSizePrev = float2(float(rectWprev), float(rectHprev));
     consts->gResourceSizeInvPrev = float2(1.0f / resourceWprev, 1.0f / resourceHprev);
     consts->gPrintfAt = uint2(m_CommonSettings.printfAt[0], m_CommonSettings.printfAt[1]);
-    consts->gRectOrigin = uint2(m_CommonSettings.rectOrigin[0], m_CommonSettings.rectOrigin[1]);
+    consts->gInputRectOrigin = int2(m_CommonSettings.inputRectOrigin[0], m_CommonSettings.inputRectOrigin[1]);
+    consts->gOutputRectOrigin = int2(m_CommonSettings.outputRectOrigin[0], m_CommonSettings.outputRectOrigin[1]);
+    consts->gDispatchInputRectOrigin = int2(0, 0);
+    consts->gDispatchOutputRectOrigin = int2(0, 0);
     consts->gRectSize = int2(rectW, rectH);
     consts->gSpecMaxAccumulatedFrameNum = isHistoryReset ? 0.0f : (float)min(settings.specularMaxAccumulatedFrameNum, RELAX_MAX_HISTORY_FRAME_NUM);
     consts->gSpecMaxFastAccumulatedFrameNum = isHistoryReset ? 0.0f : (float)min(settings.specularMaxFastAccumulatedFrameNum, RELAX_MAX_HISTORY_FRAME_NUM);
@@ -159,7 +162,8 @@ void nrd::InstanceImpl::AddSharedConstants_Relax(const RelaxSettings& settings, 
     consts->gDebug = m_CommonSettings.debug;
     consts->gOrthoMode = m_OrthoMode;
     consts->gUnproject = 1.0f / (0.5f * rectH * m_ProjectY);
-    consts->gFramerateScale = clamp(16.66f / m_TimeDelta, 0.25f, 4.0f); // TODO: use m_FrameRateScale?
+    consts->gFrameRateScale = m_FrameRateScale;
+    consts->gFrameRateScaleSmoothed = m_FrameRateScaleSmoothed;
     consts->gCheckerboardResolveAccumSpeed = m_CheckerboardResolveAccumSpeed;
     consts->gHistoryFixFrameNum = settings.historyFixFrameNum + 1.0f;
     consts->gHistoryFixBasePixelStride = (float)settings.historyFixBasePixelStride;
@@ -223,8 +227,9 @@ void nrd::InstanceImpl::Update_Relax(const DenoiserData& denoiserData) {
 
     { // PREPASS
         uint32_t passIndex = AsUint(Dispatch::PREPASS) + (enableHitDistanceReconstruction ? 1 : 0);
-        void* consts = PushDispatch(denoiserData, passIndex);
+        RELAX_PrePassConstants* consts = (RELAX_PrePassConstants*)PushDispatch(denoiserData, passIndex);
         AddSharedConstants_Relax(settings, consts);
+        consts->gDispatchInputRectOrigin = enableHitDistanceReconstruction ? int2(0, 0) : consts->gInputRectOrigin;
     }
 
     { // TEMPORAL_ACCUMULATION
@@ -265,8 +270,9 @@ void nrd::InstanceImpl::Update_Relax(const DenoiserData& denoiserData) {
 
         RELAX_AtrousConstants* consts = (RELAX_AtrousConstants*)PushDispatch(denoiserData, AsUint(passIndex)); // TODO: same as "RELAX_AtrousSmemConstants"
         AddSharedConstants_Relax(settings, consts);
-        consts->gStepSize = 1 << i;                          // TODO: push constant
-        consts->gIsLastPass = i == iterationNum - 1 ? 1 : 0; // TODO: push constant
+        consts->gStepSize = 1 << i;
+        consts->gIsLastPass = i == iterationNum - 1 ? 1 : 0;
+        consts->gDispatchOutputRectOrigin = consts->gIsLastPass ? consts->gOutputRectOrigin : int2(0, 0);
     }
 
     // SPLIT_SCREEN

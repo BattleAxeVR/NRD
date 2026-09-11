@@ -9,7 +9,8 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 */
 
 // Switches ( default 1 )
-#define SIGMA_USE_EARLY_OUT_IN_TS                       1 // improves performance in regions with hard shadow
+#define SIGMA_USE_EARLY_OUT_IN_BLURS                    1 // improves performance of spatial filters in tiles with expected 0 blur radius ( fully in shadow, hard shadow )
+#define SIGMA_USE_EARLY_OUT_IN_TS                       1 // improves performance of temporal stabilization pass in tiles with expected 0 blur radius ( fully in shadow, hard shadow )
 #define SIGMA_USE_CATROM                                1 // sharper reprojection
 #define SIGMA_5X5_TEMPORAL_KERNEL                       1 // provides variance estimation in a wider radius
 #define SIGMA_5X5_BLUR_RADIUS_ESTIMATION_KERNEL         1 // helps to improve stability, but adds 10% of overhead
@@ -54,15 +55,16 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
     NRD_CONSTANT( float4, gFrustumPrev ) \
     NRD_CONSTANT( float4, gCameraDelta ) \
     NRD_CONSTANT( float4, gMvScale ) \
+    NRD_CONSTANT( float4, gMvBias ) \
     NRD_CONSTANT( float2, gResourceSizeInv ) \
     NRD_CONSTANT( float2, gResourceSizeInvPrev ) \
     NRD_CONSTANT( float2, gRectSize ) \
     NRD_CONSTANT( float2, gRectSizeInv ) \
     NRD_CONSTANT( float2, gRectSizePrev ) \
     NRD_CONSTANT( float2, gResolutionScale ) \
-    NRD_CONSTANT( float2, gRectOffset ) \
     NRD_CONSTANT( uint2, gPrintfAt ) \
-    NRD_CONSTANT( uint2, gRectOrigin ) \
+    NRD_CONSTANT( int2, gInputRectOrigin ) \
+    NRD_CONSTANT( int2, gOutputRectOrigin ) \
     NRD_CONSTANT( int2, gRectSizeMinusOne ) \
     NRD_CONSTANT( int2, gTilesSizeMinusOne ) \
     NRD_CONSTANT( float, gOrthoMode ) \
@@ -70,9 +72,11 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
     NRD_CONSTANT( float, gDenoisingRange ) \
     NRD_CONSTANT( float, gPlaneDistSensitivity ) \
     NRD_CONSTANT( float, gStabilizationStrength ) \
+    NRD_CONSTANT( float, gCheckerboardResolveAccumSpeed ) \
     NRD_CONSTANT( float, gDebug ) \
     NRD_CONSTANT( float, gSplitScreen ) \
     NRD_CONSTANT( float, gViewZScale ) \
     NRD_CONSTANT( float, gMinRectDimMulUnproject ) \
+    NRD_CONSTANT( uint, gCheckerboard ) \
     NRD_CONSTANT( uint, gFrameIndex ) \
     NRD_CONSTANT( uint, gIsRectChanged )

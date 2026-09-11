@@ -27,12 +27,12 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     NRD_CTA_ORDER_REVERSED;
 
     // Tile-based early out
-    float isSky = gIn_Tiles[pixelPos >> 4];
-    if (isSky != 0.0 || pixelPos.x >= gRectSize.x || pixelPos.y >= gRectSize.y)
+    float isSky = NRD_SURFACE( gIn_Tiles, pixelPos >> 4 );
+    if (isSky != 0.0 || any(pixelPos >= gRectSize))
         return;
 
     // Early out if linearZ is beyond denoising range
-    float centerViewZ = UnpackViewZ(gIn_ViewZ[WithRectOrigin(pixelPos)]);
+    float centerViewZ = UnpackViewZ(NRD_SURFACE( gIn_ViewZ, pixelPos ));
     if (!IsInDenoisingRange(centerViewZ))
         return;
 
@@ -47,20 +47,20 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     float materialID0 = 0;
     float materialID1 = 0;
     float2 checkerboardResolveWeights = 1.0;
-#if( NRD_DIFF && NRD_SPEC )
+#if( NRD_HAS_DIFF && NRD_HAS_SPEC )
     if ((gSpecCheckerboard != 2) || (gDiffCheckerboard != 2))
-#elif( NRD_DIFF )
+#elif( NRD_HAS_DIFF )
     if (gDiffCheckerboard != 2)
 #else
     if (gSpecCheckerboard != 2)
 #endif
     {
-        float viewZ0 = UnpackViewZ(gIn_ViewZ[WithRectOrigin(checkerboardPos.xz)]);
-        float viewZ1 = UnpackViewZ(gIn_ViewZ[WithRectOrigin(checkerboardPos.yz)]);
+        float viewZ0 = UnpackViewZ(NRD_SURFACE( gIn_ViewZ, checkerboardPos.xz ));
+        float viewZ1 = UnpackViewZ(NRD_SURFACE( gIn_ViewZ, checkerboardPos.yz ));
 
     #if( NRD_NORMAL_ENCODING == NRD_NORMAL_ENCODING_R10G10B10A2_UNORM )
-        NRD_FrontEnd_UnpackNormalAndRoughness(gIn_Normal_Roughness[WithRectOrigin(checkerboardPos.xz)], materialID0);
-        NRD_FrontEnd_UnpackNormalAndRoughness(gIn_Normal_Roughness[WithRectOrigin(checkerboardPos.yz)], materialID1);
+        NRD_FrontEnd_UnpackNormalAndRoughness(NRD_SURFACE( gIn_Normal_Roughness, checkerboardPos.xz ), materialID0);
+        NRD_FrontEnd_UnpackNormalAndRoughness(NRD_SURFACE( gIn_Normal_Roughness, checkerboardPos.yz ), materialID1);
     #endif
 
         checkerboardResolveWeights = GetBilateralWeight(float2(viewZ0, viewZ1), centerViewZ);
@@ -72,7 +72,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 #endif
 
     float centerMaterialID;
-    float4 centerNormalRoughness = NRD_FrontEnd_UnpackNormalAndRoughness(gIn_Normal_Roughness[WithRectOrigin(pixelPos)], centerMaterialID);
+    float4 centerNormalRoughness = NRD_FrontEnd_UnpackNormalAndRoughness(NRD_SURFACE( gIn_Normal_Roughness, pixelPos ), centerMaterialID);
     float3 centerNormal = centerNormalRoughness.xyz;
     float centerRoughness = centerNormalRoughness.w;
 
@@ -81,7 +81,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 
     float2 pixelUv = float2(pixelPos + 0.5) * gRectSizeInv;
 
-#if( NRD_DIFF )
+#if( NRD_HAS_DIFF )
     bool diffHasData = true;
     int2 diffPos = pixelPos;
 #if( NRD_SUPPORTS_CHECKERBOARD == 1 )
@@ -93,9 +93,9 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 #endif
 
     // Reading diffuse & resolving diffuse checkerboard
-    float4 diffuseIllumination = gIn_Diff[diffPos];
-    #if( NRD_MODE == SH )
-        RELAX_SH_TYPE diffuseSH = gIn_DiffSh[diffPos];
+    float4 diffuseIllumination = NRD_SURFACE( gIn_Diff, diffPos );
+    #if( NRD_MODE == NRD_MODE_SH )
+        RELAX_SH_TYPE diffuseSH = NRD_SURFACE( gIn_DiffSh, diffPos );
     #endif
 
 #if( NRD_SUPPORTS_CHECKERBOARD == 1 )
@@ -108,15 +108,15 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
         #endif
         wc *= Math::PositiveRcp( wc.x + wc.y );
 
-        float4 d0 = gIn_Diff[checkerboardPos.xz];
-        float4 d1 = gIn_Diff[checkerboardPos.yz];
+        float4 d0 = NRD_SURFACE( gIn_Diff, checkerboardPos.xz );
+        float4 d1 = NRD_SURFACE( gIn_Diff, checkerboardPos.yz );
         d0 = Denanify( wc.x, d0 );
         d1 = Denanify( wc.y, d1 );
         diffuseIllumination = d0 * wc.x + d1 * wc.y;
 
-        #if( NRD_MODE == SH )
-            RELAX_SH_TYPE d0SH = gIn_DiffSh[checkerboardPos.xz];
-            RELAX_SH_TYPE d1SH = gIn_DiffSh[checkerboardPos.yz];
+        #if( NRD_MODE == NRD_MODE_SH )
+            RELAX_SH_TYPE d0SH = NRD_SURFACE( gIn_DiffSh, checkerboardPos.xz );
+            RELAX_SH_TYPE d1SH = NRD_SURFACE( gIn_DiffSh, checkerboardPos.yz );
             d0SH = Denanify( wc.x, d0SH );
             d1SH = Denanify( wc.y, d1SH );
             diffuseSH = d0SH * wc.x + d1SH * wc.y;
@@ -150,30 +150,38 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
             float3 offset = POISSON_SAMPLES[i];
 
             // Sample coordinates
-            float2 uv = pixelUv * gRectSize + Geometry::RotateVector(rotator, offset.xy) * blurRadius;
+            float2 uv = pixelUv + Geometry::RotateVector(rotator, offset.xy) * blurRadius * gRectSizeInv;
 
-            // Snap to the pixel center!
-            uv = floor(uv) + 0.5;
+            // Apply "mirror" to not waste taps going outside of the screen
+            float2 mirrorUv = MirrorUv( uv );
+            float sampleWeight = any( uv != mirrorUv ) ? 1.0 : GetGaussianWeight( offset.z );
 
-            // Apply checkerboard shift
+            // "uv" to "pos"
+            int2 samplePos = int2( mirrorUv * gRectSize );
+
+            // Move to a "valid" pixel in checkerboard mode
+            int checkerboardX = samplePos.x;
         #if( NRD_SUPPORTS_CHECKERBOARD == 1 )
-            uv = ApplyCheckerboardShift(uv, gDiffCheckerboard, i, gFrameIndex);
+            if( gDiffCheckerboard != 2 )
+            {
+                const int shift = ( ( i & 0x1 ) == 0 ) ? -1 : 1; // compile time
+
+                bool isShifted = Sequence::CheckerBoard( samplePos, gFrameIndex ) != gDiffCheckerboard;
+                samplePos.x += isShifted ? shift : 0;
+                mirrorUv.x += isShifted * gRectSizeInv.x * shift;
+
+                checkerboardX = samplePos.x >> 1;
+                sampleWeight = ( samplePos.x < 0 || samplePos.x >= gRectSize.x ) ? 0.0 : sampleWeight;
+            }
         #endif
-
-            // Texture coordinates
-            uv *= gRectSizeInv;
-
-            float2 uvScaled = ClampUvToViewport( uv );
-            float2 checkerboardUvScaled = float2( uvScaled.x * ( gDiffCheckerboard != 2 ? 0.5 : 1.0 ), uvScaled.y );
 
             // Fetch data
             float sampleMaterialID;
-            float3 sampleNormal = NRD_FrontEnd_UnpackNormalAndRoughness(gIn_Normal_Roughness.SampleLevel(gNearestClamp, WithRectOffset(uvScaled), 0), sampleMaterialID).rgb;
-            float sampleViewZ = UnpackViewZ(gIn_ViewZ.SampleLevel(gNearestClamp, WithRectOffset(uvScaled), 0));
-            float3 sampleWorldPos = GetCurrentWorldPosFromClipSpaceXY(uv * 2.0 - 1.0, sampleViewZ);
+            float3 sampleNormal = NRD_FrontEnd_UnpackNormalAndRoughness( NRD_SURFACE( gIn_Normal_Roughness, samplePos ), sampleMaterialID ).rgb;
+            float sampleViewZ = UnpackViewZ( NRD_SURFACE( gIn_ViewZ, samplePos ) );
+            float3 sampleWorldPos = GetCurrentWorldPosFromClipSpaceXY( mirrorUv * 2.0 - 1.0, sampleViewZ );
 
             // Sample weight
-            float sampleWeight = IsInScreenNearest(uv);
             sampleWeight *= IsInDenoisingRange(sampleViewZ);
             sampleWeight *= CompareMaterials(centerMaterialID, sampleMaterialID, gDiffMinMaterial);
 
@@ -187,36 +195,35 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
             float angle = Math::AcosApproxPositive(dot(centerNormal, sampleNormal));
             sampleWeight *= ComputeWeight(angle, normalWeightParam, 0.0);
 
-            float4 sampleDiffuseIllumination = gIn_Diff.SampleLevel(gNearestClamp, checkerboardUvScaled, 0);
+            float4 sampleDiffuseIllumination = NRD_SURFACE( gIn_Diff, int2( checkerboardX, samplePos.y ) );
             sampleDiffuseIllumination = Denanify( sampleWeight, sampleDiffuseIllumination );
 
             sampleWeight *= lerp(diffMinHitDistanceWeight, 1.0, ComputeExponentialWeight(sampleDiffuseIllumination.a, hitDistanceWeightParams.x, hitDistanceWeightParams.y));
-            sampleWeight *= GetGaussianWeight(offset.z);
 
             // Accumulate
             weightSum += sampleWeight;
 
             diffuseIllumination += sampleDiffuseIllumination * sampleWeight;
-            #if( NRD_MODE == SH )
-                RELAX_SH_TYPE sampleDiffuseSH = gIn_DiffSh.SampleLevel(gNearestClamp, checkerboardUvScaled, 0);
+            #if( NRD_MODE == NRD_MODE_SH )
+                RELAX_SH_TYPE sampleDiffuseSH = NRD_SURFACE( gIn_DiffSh, int2( checkerboardX, samplePos.y ) );
                 sampleDiffuseSH = Denanify( sampleWeight, sampleDiffuseSH );
                 diffuseSH += sampleDiffuseSH * sampleWeight;
             #endif
         }
 
         diffuseIllumination /= weightSum;
-        #if( NRD_MODE == SH )
+        #if( NRD_MODE == NRD_MODE_SH )
             diffuseSH /= weightSum;
         #endif
     }
 
-    gOut_Diff[pixelPos] = clamp(diffuseIllumination, 0, NRD_FP16_MAX);
-    #if( NRD_MODE == SH )
-        gOut_DiffSh[pixelPos] = clamp(diffuseSH, -NRD_FP16_MAX, NRD_FP16_MAX);
+    NRD_SURFACE( gOut_Diff, pixelPos ) = clamp(diffuseIllumination, 0, NRD_FP16_MAX);
+    #if( NRD_MODE == NRD_MODE_SH )
+        NRD_SURFACE( gOut_DiffSh, pixelPos ) = clamp(diffuseSH, -NRD_FP16_MAX, NRD_FP16_MAX);
     #endif
 #endif
 
-#if( NRD_SPEC )
+#if( NRD_HAS_SPEC )
     Rng::Hash::Initialize( pixelPos, gFrameIndex );
 
     bool specHasData = true;
@@ -230,9 +237,9 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 #endif
 
     // Reading specular & resolving specular checkerboard
-    float4 specularIllumination = gIn_Spec[specPos];
-    #if( NRD_MODE == SH )
-        RELAX_SH_TYPE specularSH = gIn_SpecSh[specPos];
+    float4 specularIllumination = NRD_SURFACE( gIn_Spec, specPos );
+    #if( NRD_MODE == NRD_MODE_SH )
+        RELAX_SH_TYPE specularSH = NRD_SURFACE( gIn_SpecSh, specPos );
     #endif
 
 #if( NRD_SUPPORTS_CHECKERBOARD == 1 )
@@ -245,15 +252,15 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 #endif
         wc *= Math::PositiveRcp( wc.x + wc.y );
 
-        float4 s0 = gIn_Spec[checkerboardPos.xz];
-        float4 s1 = gIn_Spec[checkerboardPos.yz];
+        float4 s0 = NRD_SURFACE( gIn_Spec, checkerboardPos.xz );
+        float4 s1 = NRD_SURFACE( gIn_Spec, checkerboardPos.yz );
         s0 = Denanify( wc.x, s0 );
         s1 = Denanify( wc.y, s1 );
         specularIllumination = s0 * wc.x + s1 * wc.y;
 
-        #if( NRD_MODE == SH )
-            RELAX_SH_TYPE s0SH = gIn_SpecSh[checkerboardPos.xz];
-            RELAX_SH_TYPE s1SH = gIn_SpecSh[checkerboardPos.yz];
+        #if( NRD_MODE == NRD_MODE_SH )
+            RELAX_SH_TYPE s0SH = NRD_SURFACE( gIn_SpecSh, checkerboardPos.xz );
+            RELAX_SH_TYPE s1SH = NRD_SURFACE( gIn_SpecSh, checkerboardPos.yz );
             s0SH = Denanify( wc.x, s0SH );
             s1SH = Denanify( wc.y, s1SH );
             specularSH = s0SH * wc.x + s1SH * wc.y;
@@ -306,31 +313,39 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
             float3 offset = POISSON_SAMPLES[i];
 
             // Sample coordinates
-            float2 uv = pixelUv * gRectSize + Geometry::RotateVector(rotator, offset.xy) * blurRadius;
+            float2 uv = pixelUv + Geometry::RotateVector(rotator, offset.xy) * blurRadius * gRectSizeInv;
 
-            // Snap to the pixel center!
-            uv = floor(uv) + 0.5;
+            // Apply "mirror" to not waste taps going outside of the screen
+            float2 mirrorUv = MirrorUv( uv );
+            float sampleWeight = any( uv != mirrorUv ) ? 1.0 : GetGaussianWeight( offset.z );
 
-            // Apply checkerboard shift
+            // "uv" to "pos"
+            int2 samplePos = int2( mirrorUv * gRectSize );
+
+            // Move to a "valid" pixel in checkerboard mode
+            int checkerboardX = samplePos.x;
         #if( NRD_SUPPORTS_CHECKERBOARD == 1 )
-            uv = ApplyCheckerboardShift(uv, gSpecCheckerboard, i, gFrameIndex);
+            if( gSpecCheckerboard != 2 )
+            {
+                const int shift = ( ( i & 0x1 ) == 0 ) ? -1 : 1; // compile time
+
+                bool isShifted = Sequence::CheckerBoard( samplePos, gFrameIndex ) != gSpecCheckerboard;
+                samplePos.x += isShifted ? shift : 0;
+                mirrorUv.x += isShifted * gRectSizeInv.x * shift;
+
+                checkerboardX = samplePos.x >> 1;
+                sampleWeight = ( samplePos.x < 0 || samplePos.x >= gRectSize.x ) ? 0.0 : sampleWeight;
+            }
         #endif
-
-            // Texture coordinates
-            uv *= gRectSizeInv;
-
-            float2 uvScaled = ClampUvToViewport( uv );
-            float2 checkerboardUvScaled = float2( uvScaled.x * ( gSpecCheckerboard != 2 ? 0.5 : 1.0 ), uvScaled.y );
 
             // Fetch data
             float sampleMaterialID;
-            float4 sampleNormalRoughness = NRD_FrontEnd_UnpackNormalAndRoughness(gIn_Normal_Roughness.SampleLevel(gNearestClamp, WithRectOffset(uvScaled), 0), sampleMaterialID);
+            float4 sampleNormalRoughness = NRD_FrontEnd_UnpackNormalAndRoughness( NRD_SURFACE( gIn_Normal_Roughness, samplePos ), sampleMaterialID );
             float3 sampleNormal = sampleNormalRoughness.rgb;
             float sampleRoughness = sampleNormalRoughness.a;
-            float sampleViewZ = UnpackViewZ(gIn_ViewZ.SampleLevel(gNearestClamp, WithRectOffset(uvScaled), 0));
+            float sampleViewZ = UnpackViewZ( NRD_SURFACE( gIn_ViewZ, samplePos ) );
 
             // Sample weight
-            float sampleWeight = IsInScreenNearest(uv);
             sampleWeight *= IsInDenoisingRange(sampleViewZ);
             sampleWeight *= CompareMaterials(centerMaterialID, sampleMaterialID, gSpecMinMaterial);
             sampleWeight *= ComputeWeight(sampleRoughness, roughnessWeightParams.x, roughnessWeightParams.y);
@@ -338,7 +353,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
             float angle = Math::AcosApproxPositive(dot(centerNormal, sampleNormal));
             sampleWeight *= ComputeWeight(angle, normalWeightParam, 0.0);
 
-            float3 sampleWorldPos = GetCurrentWorldPosFromClipSpaceXY(uv * 2.0 - 1.0, sampleViewZ);
+            float3 sampleWorldPos = GetCurrentWorldPosFromClipSpaceXY( mirrorUv * 2.0 - 1.0, sampleViewZ );
             sampleWeight *= GetPlaneDistanceWeight(
                 centerWorldPos,
                 centerNormal,
@@ -346,14 +361,13 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
                 sampleWorldPos,
                 gDepthThreshold);
 
-            float4 sampleSpecularIllumination = gIn_Spec.SampleLevel(gNearestClamp, checkerboardUvScaled, 0);
+            float4 sampleSpecularIllumination = NRD_SURFACE( gIn_Spec, int2( checkerboardX, samplePos.y ) );
             sampleSpecularIllumination = Denanify( sampleWeight, sampleSpecularIllumination );
 
             if (Rng::Hash::GetFloat() < sampleWeight * NoV)
                 minHitT = min(minHitT, sampleSpecularIllumination.a == 0.0 ? NRD_INF : sampleSpecularIllumination.a);
 
             sampleWeight *= lerp(specMinHitDistanceWeight, 1.0, ComputeExponentialWeight(sampleSpecularIllumination.a, hitDistanceWeightParams.x, hitDistanceWeightParams.y));
-            sampleWeight *= GetGaussianWeight(offset.z);
 
             // Decreasing weight for samples that most likely are very close to reflection contact which should not be pre-blurred
             float d = length(sampleWorldPos - centerWorldPos);
@@ -365,22 +379,22 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
             weightSum += sampleWeight;
 
             specularIllumination.rgb += sampleSpecularIllumination.rgb * sampleWeight;
-            #if( NRD_MODE == SH )
-                RELAX_SH_TYPE sampleSpecularSH = gIn_SpecSh.SampleLevel(gNearestClamp, checkerboardUvScaled, 0);
+            #if( NRD_MODE == NRD_MODE_SH )
+                RELAX_SH_TYPE sampleSpecularSH = NRD_SURFACE( gIn_SpecSh, int2( checkerboardX, samplePos.y ) );
                 sampleSpecularSH = Denanify( sampleWeight, sampleSpecularSH );
                 specularSH += sampleSpecularSH * sampleWeight;
             #endif
         }
         specularIllumination.rgb /= weightSum;
         specularIllumination.a = minHitT == NRD_INF ? 0.0 : minHitT;
-        #if( NRD_MODE == SH )
+        #if( NRD_MODE == NRD_MODE_SH )
             specularSH /= weightSum;
         #endif
     }
 
-    gOut_Spec[pixelPos] = clamp(specularIllumination, 0, NRD_FP16_MAX);
-    #if( NRD_MODE == SH )
-        gOut_SpecSh[pixelPos] = clamp(specularSH, -NRD_FP16_MAX, NRD_FP16_MAX);
+    NRD_SURFACE( gOut_Spec, pixelPos ) = clamp(specularIllumination, 0, NRD_FP16_MAX);
+    #if( NRD_MODE == NRD_MODE_SH )
+        NRD_SURFACE( gOut_SpecSh, pixelPos ) = clamp(specularSH, -NRD_FP16_MAX, NRD_FP16_MAX);
     #endif
 #endif
 }

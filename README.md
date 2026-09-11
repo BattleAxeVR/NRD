@@ -1,4 +1,4 @@
-# NVIDIA REAL-TIME DENOISERS (NRD) v4.17.4
+# NVIDIA REAL-TIME DENOISERS (NRD) v4.18.0
 
 [![Build NRD SDK](https://github.com/NVIDIA-RTX/NRD/actions/workflows/build.yml/badge.svg)](https://github.com/NVIDIA-RTX/NRD/actions/workflows/build.yml)
 
@@ -83,7 +83,7 @@ See *[NRD sample](https://github.com/NVIDIA-RTX/NRD-Sample)* project for all det
   - `NRD_STATIC_LIBRARY` - build static library (OFF by default, visible in the parent project)
   - `NRD_NORMAL_ENCODING` - *normal* encoding for the entire library
   - `NRD_ROUGHNESS_ENCODING` - *roughness* encoding for the entire library
-  - `NRD_SUPPORTS_VIEWPORT_OFFSET` - enable `CommonSettings::rectOrigin` support (OFF by default)
+  - `NRD_SUPPORTS_VIEWPORT_OFFSET` - enable `CommonSettings::inputRectOrigin` and `CommonSettings::outputRectOrigin` support (OFF by default)
   - `NRD_SUPPORTS_CHECKERBOARD` - enable `checkerboardMode` support (ON by default)
   - `NRD_SUPPORTS_HISTORY_CONFIDENCE` - enable `IN_DIFF_CONFIDENCE` and `IN_SPEC_CONFIDENCE` support (ON by default)
   - `NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX` - enable `IN_DISOCCLUSION_THRESHOLD_MIX` support (ON by default)
@@ -137,6 +137,8 @@ Flow:
 *NRD* doesn't make any *GAPI* calls. The application is supposed to invoke a set of compute *Dispatch* calls to do denoising. Refer to [NRDIntegration](https://github.com/NVIDIA-RTX/NRD/blob/master/Integration/NRDIntegration.hpp) file as an example of an integration using low level RHI.
 
 *NRD* doesn't have a "resize" functionality. On a resolution change the old denoiser needs to be destroyed and a new one needs to be created with new parameters. But *NRD* supports dynamic resolution scaling via `CommonSettings::resourceSize, resourceSizePrev, rectSize, rectSizePrev`.
+
+If `NRD_SUPPORTS_VIEWPORT_OFFSET` is enabled, `CommonSettings::inputRectOrigin` applies to `IN_` resources, excluding `IN_DIFF_CONFIDENCE`, `IN_SPEC_CONFIDENCE` and `IN_DISOCCLUSION_THRESHOLD_MIX`. `CommonSettings::outputRectOrigin` applies to all `OUT_` resources and resources from `PERMANENT_POOL` on both reads and writes. Since `outputRectOrigin` is also used to access previous-frame history, changing it assumes `AccumulationMode::CLEAR_AND_RESTART`. The rectangles defined by `inputRectOrigin + rectSize` and `outputRectOrigin + rectSize` must fit inside `resourceSize`.
 
 Some textures can be requested as inputs or outputs for a method. Required resources are specified near a denoiser declaration inside the `Denoiser` enum class. Also `NRD.hlsli` has a comment near each front-end or back-end function, clarifying which resources this function is for.
 
@@ -430,14 +432,14 @@ else
 
 *NRD* doesn't use "baseColor" and "metalness" anywhere for denoising. All materials must be de-modulated before denoising on the application side (see [material demodulation](#material-demodulation)). Here are commons inputs, provided for primary hits (or *PSR*):
 
-* **IN\_MV** - non-jittered surface motion (`old = new + MV`)
+* **IN\_MV** - surface motion (`old = new + MV`), which must be non-jittered after scaling and bias
 
   Modes:
   - *2D screen-space motion* - 2D motion doesn't provide information about movement along the view direction. *NRD* can reject history on dynamic objects in this case
   - *2.5D screen-space motion (recommended)* - similar to the 2D screen-space motion, but `.z = viewZprev - viewZ` (see [NRD sample/GetMotion](https://github.com/NVIDIA-RTX/NRD-Sample/blob/9deb12a5408c4e2e07a6ff261f0a1051dd22f5d6/Shaders/Include/Shared.hlsli#L358))
   - *3D world-space motion* - camera motion should not be included (it's already in the matrices). In other words, if there are no moving objects, all motion vectors must be `0` even if the camera is moving
 
-  Motion vector scaling can be provided via `CommonSettings::motionVectorScale`. *NRD* expectations:
+  Motion vector scaling and bias can be provided via `CommonSettings::motionVectorScale` and `CommonSettings::motionVectorBias` respectively. The bias is applied after scaling and uses the resulting units: `mv = IN_MV * motionVectorScale + motionVectorBias`. *NRD* expectations:
   - Use `CommonSettings::isMotionVectorInWorldSpace = true` for 3D world-space motion
   - Use `CommonSettings::isMotionVectorInWorldSpace = false` and `CommonSettings::motionVectorScale[2] == 0` for 2D screen-space motion
   - Use `CommonSettings::isMotionVectorInWorldSpace = false` and `CommonSettings::motionVectorScale[2] != 0` for 2.5D screen-space motion
@@ -491,6 +493,7 @@ Radiance:
 - Since *NRD* denoisers accumulate signals for a limited number of frames, the input signal must converge *reasonably* well for this number of frames. `REFERENCE` denoiser can be used to estimate temporal signal quality
 - Since *NRD* denoisers process signals spatially, high-energy fireflies in the input signal should be avoided. Some of them can be removed by enabling anti-firefly filter in *NRD*, but it will only work if the "background" signal is confident. The worst case is having a single pixel with a high energy divided by a very small PDF to represent the lack of energy in neighboring non-representative (black) pixels. Probabilistic diffuse / specular split for the 1st bounce requires special treatment described in `HitDistanceReconstructionMode`. In case of probabilistic split for 2nd+ bounces, it's still recommended to clamp diffuse / specular probabilities to a sane range to avoid division by a very small value, leading to a high energy firefly, difficult to get rid of in a short amount of time. Energy increase should not be more than 20x-30x, what corresponds to around `0.05` min probability. `0` and `1` probabilities are absolutely acceptable (for example, metals don't have diffuse component)
 - Radiance must be separated into diffuse and specular at primary hit (or secondary hit in case of *PSR*)
+- Direct emission from primary surfaces should be decoupled from incoming radiance to keep sharp emissive details (like text on in-game screens) from getting blurred
 
 Hit distance (*REBLUR* and *RELAX*):
 - NRD expects *in-lobe* `hitT`, i.e. `hitT` must represent the distance to a hit that resides within the specific *BRDF* lobe being denoised:
@@ -544,19 +547,25 @@ If `CommonSettings::enableValidation = true` *REBLUR* & *RELAX* denoisers render
 
 where:
 
-- Viewport 0 - world-space normals
+- Viewport 0 - world-space grid:
+  - 1 cube = `1 unit`
+  - REBLUR additionally overlays two "mini" viewports:
+    - the first represents a pixel with accumulated jitter samples:
+      - jitter samples in the expected `[-0.5; 0.5]` pixel range are shown as *gray* dots
+      - out-of-range values are snapped to the mini viewport boundary and shown as *red* dots
+      - projection matrix jittering changes all dots to *red*
+      - known limitation: dynamic FOV changes with an asymmetric projection matrix are also detected as projection matrix jittering
+    - the attached viewport visualizes kernel rotators in time
 - Viewport 1 - linear roughness
 - Viewport 2 - linear viewZ
   - green = `+`
   - blue = `-`
   - red = `out of denoising range`
 - Viewport 3 - difference between MVs, coming from `IN_MV`, and expected MVs, assuming that the scene is static
+  - magenta = likely jittered MVs (the mismatch matches `CommonSettings::cameraJitter`)
   - blue = `out of screen`
   - pixels with moving objects have non-0 values
-- Viewport 4 - world-space grid & camera jitter:
-  - 1 cube = `1 unit`
-  - the square in the bottom-right corner represents a pixel with accumulated samples
-  - the red boundary of the square marks jittering outside of the pixel area
+- Viewport 4 - world-space normals
 - Viewport 7 - amount of virtual history
 - Viewport 8 - number of accumulated frames for diffuse signal (checkerboarded red = `history reset`)
 - Viewport 11 - number of accumulated frames for specular signal (checkerboarded red = `history reset`)
@@ -637,6 +646,44 @@ IN_MV = GetMotionAt( Bvirtual );
 Implementation details:
 - Jumping through "delta" events [code](https://github.com/NVIDIA-RTX/NRD-Sample/blob/0e4242ef553ac66c179d975322c7d18aaa14e3b5/Shaders/TraceOpaque.cs.hlsl#L452)
 - MV calculation [code](https://github.com/NVIDIA-RTX/NRD-Sample/blob/6f1a294333dd32dd5ea404845354d76315824add/Shaders/TraceOpaque.cs.hlsl#L644)
+
+## IQ VS PERFORMANCE: TRACING AND DENOISING RESOLUTION
+
+Two capabilities should be considered together:
+
+- *SH-mode* radiance denoising in *REBLUR* or *RELAX* adds overhead over the corresponding non-SH denoiser, but should be treated as a must-have when *NRD* produces a lower-resolution output. Its output enables an application-side *SG/SH resolve* at *full* render resolution against *full*-resolution guides, restoring detail and suppressing artifacts introduced by lower-resolution processing. See [`NRD.hlsli`](https://github.com/NVIDIA-RTX/NRD/blob/master/Shaders/NRD.hlsli) and [Interaction with upscaling](#interaction-with-upscaling-dlssfsrxesstaau)
+- *Reduced-resolution and checkerboard processing* can substantially improve performance: *NRD* can process a smaller image, reconstruct checkerboarded inputs on the fly, or combine both
+
+In short, reduced-resolution and checkerboard modes trade image quality for performance; *SG/SH* resolve is the quality-recovery step that makes those savings practical.
+
+Tracing and denoising resolutions are separate performance levers, but they have different configuration scopes. Tracing can be selected per signal. Denoising resolution is configured per *NRD* instance through `CommonSettings::resourceSize` and `CommonSettings::rectSize`, so signals denoised at different resolutions require separate instances. A combined diffuse-specular denoiser also has a single shared `checkerboardMode`.
+
+In the notation below, `{X; Y}` is the effective resolution relative to the render resolution. The `-cb` suffix marks a checkerboarded axis: for example, `{0.5-cb; 1}` means *half* sampling density along `X` via *checkerboarding* and *full* resolution along `Y`. An unsuffixed `0.5` means that the axis is actually downscaled. All inputs still have the logical denoising resolution, with checkerboarded noisy samples tightly packed into the left *half* of the input texture as described by `CheckerboardMode`.
+
+The main variants, ordered from best image quality to best performance, are:
+
+| Variant | Tracing | Denoising | Application-side setup and tradeoff |
+|---|---:|---:|---|
+| *Full* resolution (*best IQ, worst performance*) | *full*&nbsp;<code>{1;&nbsp;1}</code> | *full*&nbsp;<code>{1;&nbsp;1}</code> | Trace and denoise every pixel at *full* resolution. This is the baseline. |
+| Checkerboard tracing | *half*&nbsp;<code>{0.5&#8209;cb;&nbsp;1}</code> | *full*&nbsp;<code>{1;&nbsp;1}</code> | Trace alternating screen pixels along `X`, pack the noisy samples, and enable `checkerboardMode`. *NRD* reconstructs the missing samples at *full* render resolution. This reduces tracing to *half* resolution, but not the number of pixels processed by *NRD*. |
+| Checkerboard tracing with vertical downscaling | *quarter*&nbsp;<code>{0.5&#8209;cb;&nbsp;0.5}</code> | *half*&nbsp;<code>{1;&nbsp;0.5}</code> | Downsample the guides and noisy signal `2x` along `Y`, then trace alternating screen pixels along `X` in that *half*-height grid and pack the noisy samples. Enable `checkerboardMode` so *NRD* reconstructs `X` to render resolution; the application only needs to upscale the denoised result `2x` along `Y`. This traces one *quarter* of the render-resolution pixel count while *NRD* processes one *half*. |
+| *Quarter* resolution (*best performance, worst IQ*) | *quarter*&nbsp;<code>{0.5;&nbsp;0.5}</code> | *quarter*&nbsp;<code>{0.5;&nbsp;0.5}</code> | Trace and denoise every pixel of a *quarter*-resolution grid. From *NRD*'s point of view this is *full*-resolution input, so checkerboarding is disabled. The application upscales the denoised result in both dimensions. |
+
+When *NRD* runs below render resolution, bind downsampled guides to *NRD* but retain the original *full*-resolution guides for the application-side resolve. Spatial upscaling remains the application's responsibility: the *SG/SH resolve* helpers reconstruct signal detail but do not resize a texture.
+
+With those constraints in mind, diffuse and specular can use different configurations:
+
+- Specular:
+  - `1 rpp` at *full* render resolution (best IQ)
+  - `0.5 rpp` via checkerboarding (stable)
+  - probabilistic ray skipping with a guaranteed sample in a `3x3` area (offers *full*-resolution quality on metals, but may be less stable on dielectrics because diffuse consumes part of the per-pixel ray budget)
+- Diffuse:
+  - `1 rpp` at *full* render resolution (maybe unnecessarily expensive)
+  - `0.5 rpp` via checkerboarding
+  - `0.25 rpp` with *half*-resolution denoising (see "Checkerboard tracing with vertical downscaling" in the table)
+  - `0.25 rpp` with *quarter*-resolution denoising
+
+When tracing every pixel of the denoising grid, ray allocation between diffuse and specular is a separate decision. For a `1 rpp` budget, probabilistic lobe selection at the primary or *PSR* hit generally uses samples more efficiently than a fixed *0.5 diffuse + 0.5 specular* split: each pixel traces one selected lobe, and metals can spend the entire budget on specular. For `HitDistanceReconstructionMode::AREA_3X3`, clamp non-deterministic selection probabilities to `[1/4; 3/4]` and use Bayer dithering instead of white noise to guarantee a valid sample in the `3x3` reconstruction footprint; exact `0` and `1` remain valid for deterministic cases such as metals. Keep the pre-pass enabled. `NormalEncoding::R10_G10_B10_A2_UNORM` is highly recommended because it enables `materialID` support. To prevent skipped or zero diffuse on metals from being mixed with valid diffuse on non-metals, the application must also pack meaningful material IDs and configure `minMaterialForDiffuse` (and `minMaterialForSpecular` where needed). See the [Noisy inputs](#noisy-inputs) section for more details.
 
 ## INTERACTION WITH UPSCALING (DLSS/FSR/XESS/TAAU)
 
@@ -824,7 +871,7 @@ float hitDist = lerp( indirectDiffuseHitDist, directDiffuseHitDist, directHitDis
 
 **[NRD]** All denoisers work with positive RGB inputs (some denoisers can change color space in *front end* functions). For better image quality, HDR color inputs need to be in a sane range [0; 250], because the internal pipeline uses FP16 and *RELAX* tracks second moments of the input signal, i.e. `x^2` must fit into FP16 range. If the color input is in a wider range, any form of non-aggressive color compression can be applied (linear scaling, pow-based or log-based methods). *REBLUR* supports wider HDR ranges, because it doesn't track second moments. Passing pre-exposured colors (i.e. `color * exposure`) is not recommended, because a significant momentary change in exposure is hard to react to in this case.
 
-**[NRD]** *NRD* can track camera motion internally. For the first time pass all MVs set to 0 (you can use `CommonSettings::motionVectorScale = {0}` for this) and set `CommonSettings::isMotionVectorInWorldSpace = true`, it will allow you to simplify the initial integration. Enable application-provided MVs after getting denoising working on static objects.
+**[NRD]** *NRD* can track camera motion internally. For the first time pass all MVs set to 0 (you can use `CommonSettings::motionVectorScale = {0}` and `CommonSettings::motionVectorBias = {0}` for this) and set `CommonSettings::isMotionVectorInWorldSpace = true`, it will allow you to simplify the initial integration. Enable application-provided MVs after getting denoising working on static objects.
 
 **[NRD]** Using 2D MVs can lead to massive history reset on moving objects, because 2D motion provides information only about pixel screen position but not about real 3D world position. Consider using 2.5D or 3D MVs instead. 2.5D motion, which is 2D motion with additionally provided `viewZ` delta (i.e. `viewZprev = viewZ + MV.z`), is even better, because it has the same benefits as 3D motion, but doesn't suffer from imprecision problems caused by world-space delta rounding to FP16 during MV patching on the *NRD* side.
 

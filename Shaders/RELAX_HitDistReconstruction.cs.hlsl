@@ -26,16 +26,16 @@ void Preload(uint2 sharedPos, int2 globalPos)
     globalPos = clamp(globalPos, 0, gRectSize - 1.0);
 
     // It's ok that we don't use materialID in Hitdist reconstruction
-    float4 normalRoughness = NRD_FrontEnd_UnpackNormalAndRoughness(gIn_Normal_Roughness[WithRectOrigin(globalPos)]);
-    float viewZ = UnpackViewZ(gIn_ViewZ[WithRectOrigin(globalPos)]);
+    float4 normalRoughness = NRD_FrontEnd_UnpackNormalAndRoughness(NRD_SURFACE( gIn_Normal_Roughness, globalPos ));
+    float viewZ = UnpackViewZ(NRD_SURFACE( gIn_ViewZ, globalPos ));
     float2 hitDist = gDenoisingRange;
 
-    #if( NRD_SPEC )
-        hitDist.x = gIn_Spec[globalPos].w;
+    #if( NRD_HAS_SPEC )
+        hitDist.x = NRD_SURFACE( gIn_Spec, globalPos ).w;
     #endif
 
-    #if( NRD_DIFF )
-        hitDist.y = gIn_Diff[globalPos].w;
+    #if( NRD_HAS_DIFF )
+        hitDist.y = NRD_SURFACE( gIn_Diff, globalPos ).w;
     #endif
 
     s_Normal_Roughness[sharedPos.y][sharedPos.x] = normalRoughness;
@@ -50,11 +50,11 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     float2 pixelUv = float2(pixelPos + 0.5) * gRectSizeInv;
 
     // Preload
-    float isSky = gIn_Tiles[pixelPos >> 4];
+    float isSky = NRD_SURFACE( gIn_Tiles, pixelPos >> 4 );
     PRELOAD_INTO_SMEM_WITH_TILE_CHECK;
 
     // Tile-based early out
-    if (isSky != 0.0 || pixelPos.x >= gRectSize.x || pixelPos.y >= gRectSize.y)
+    if (isSky != 0.0 || any(pixelPos >= gRectSize))
         return;
 
     int2 smemPos = threadPos + NRD_BORDER;
@@ -66,13 +66,13 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
         return;
 
     // Center data
-    float4 normalAndRoughness = NRD_FrontEnd_UnpackNormalAndRoughness(gIn_Normal_Roughness[WithRectOrigin( pixelPos )]);
+    float4 normalAndRoughness = NRD_FrontEnd_UnpackNormalAndRoughness(NRD_SURFACE( gIn_Normal_Roughness, pixelPos ));
     float3 centerNormal = normalAndRoughness.xyz;
     float centerRoughness = normalAndRoughness.w;
 
     // Hit distance reconstruction
-#if( NRD_SPEC )
-    float3 centerSpecularIllumination = gIn_Spec[pixelPos].xyz;
+#if( NRD_HAS_SPEC )
+    float3 centerSpecularIllumination = NRD_SURFACE( gIn_Spec, pixelPos ).xyz;
     float centerSpecularHitDist = centerHitdistViewZ.x;
     float2 relaxedRoughnessWeightParams = GetRelaxedRoughnessWeightParams(centerRoughness * centerRoughness);
     float specularNormalWeightParam = GetNormalWeightParam(1.0, 1.0, centerRoughness);
@@ -81,8 +81,8 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     float sumSpecularHitDist = centerSpecularHitDist * sumSpecularWeight;
 #endif
 
-#if( NRD_DIFF )
-    float3 centerDiffuseIllumination = gIn_Diff[pixelPos].xyz;
+#if( NRD_HAS_DIFF )
+    float3 centerDiffuseIllumination = NRD_SURFACE( gIn_Diff, pixelPos ).xyz;
     float centerDiffuseHitDist = centerHitdistViewZ.y;
     float diffuseNormalWeightParam = GetNormalWeightParam(1.0, 1.0);
 
@@ -115,7 +115,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
             w *= GetGaussianWeight(length(o) * 0.5);
             w *= GetBilateralWeight(sampleViewZ, centerViewZ);
 
-#if( NRD_SPEC )
+#if( NRD_HAS_SPEC )
             float specularWeight = w;
             specularWeight *= ComputeExponentialWeight(angle, specularNormalWeightParam, 0.0);
             specularWeight *= ComputeExponentialWeight(normalAndRoughness.w * normalAndRoughness.w, relaxedRoughnessWeightParams.x, relaxedRoughnessWeightParams.y);
@@ -129,7 +129,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
             sumSpecularWeight += specularWeight;
 #endif
 
-#if( NRD_DIFF )
+#if( NRD_HAS_DIFF )
             float diffuseWeight = w;
             diffuseWeight *= ComputeExponentialWeight(angle, diffuseNormalWeightParam, 0.0);
 
@@ -145,14 +145,14 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     }
 
     // Output
-#if( NRD_SPEC )
+#if( NRD_HAS_SPEC )
     sumSpecularHitDist /= max(sumSpecularWeight, 1e-6);
-    gOut_Spec[pixelPos] = float4(centerSpecularIllumination, sumSpecularHitDist);
+    NRD_SURFACE( gOut_Spec, pixelPos ) = float4(centerSpecularIllumination, sumSpecularHitDist);
 #endif
 
-#if( NRD_DIFF )
+#if( NRD_HAS_DIFF )
     sumDiffuseHitDist /= max(sumDiffuseWeight, 1e-6);
-    gOut_Diff[pixelPos] = float4(centerDiffuseIllumination, sumDiffuseHitDist);
+    NRD_SURFACE( gOut_Diff, pixelPos ) = float4(centerDiffuseIllumination, sumDiffuseHitDist);
 #endif
 
 }

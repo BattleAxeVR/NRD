@@ -18,12 +18,12 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 #include "RELAX_Common.hlsli"
 
-#if( NRD_SPEC )
+#if( NRD_HAS_SPEC )
     groupshared float4 s_SpecResponsiveYCoCg[BUFFER_Y][BUFFER_X];
     groupshared float4 s_SpecNoisy_IsValid[BUFFER_Y][BUFFER_X];
 #endif
 
-#if( NRD_DIFF )
+#if( NRD_HAS_DIFF )
     groupshared float4 s_DiffResponsiveYCoCg[BUFFER_Y][BUFFER_X];
     groupshared float4 s_DiffNoisy_IsValid[BUFFER_Y][BUFFER_X];
 #endif
@@ -32,22 +32,22 @@ void Preload(uint2 sharedPos, int2 globalPos)
 {
     globalPos = clamp(globalPos, 0, gRectSize - 1.0);
 
-    float viewZ = gIn_ViewZ[globalPos];
+    float viewZ = NRD_SURFACE( gIn_ViewZ, globalPos );
     float isValid = float(IsInDenoisingRange( viewZ ));
 
-    #if( NRD_SPEC )
-        float4 specularResponsive = gIn_SpecFast[globalPos];
+    #if( NRD_HAS_SPEC )
+        float4 specularResponsive = NRD_SURFACE( gIn_SpecFast, globalPos );
         s_SpecResponsiveYCoCg[sharedPos.y][sharedPos.x] = float4(Color::RgbToYCoCg(specularResponsive.rgb), specularResponsive.a);
 
-        float3 specularNoisy = gIn_SpecNoisy[globalPos].xyz;
+        float3 specularNoisy = NRD_SURFACE( gIn_SpecNoisy, globalPos ).xyz;
         s_SpecNoisy_IsValid[sharedPos.y][sharedPos.x] = float4(specularNoisy, isValid);
     #endif
 
-    #if( NRD_DIFF )
-        float4 diffuseResponsive = gIn_DiffFast[globalPos];
+    #if( NRD_HAS_DIFF )
+        float4 diffuseResponsive = NRD_SURFACE( gIn_DiffFast, globalPos );
         s_DiffResponsiveYCoCg[sharedPos.y][sharedPos.x] = float4(Color::RgbToYCoCg(diffuseResponsive.rgb), diffuseResponsive.a);
 
-        float3 diffuseNoisy = gIn_DiffNoisy[globalPos].xyz;
+        float3 diffuseNoisy = NRD_SURFACE( gIn_DiffNoisy, globalPos ).xyz;
         s_DiffNoisy_IsValid[sharedPos.y][sharedPos.x] = float4(diffuseNoisy, isValid);
     #endif
 }
@@ -65,16 +65,16 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     NRD_CTA_ORDER_DEFAULT;
 
     // Preload
-    float isSky = gIn_Tiles[pixelPos >> 4];
+    float isSky = NRD_SURFACE( gIn_Tiles, pixelPos >> 4 );
     PRELOAD_INTO_SMEM_WITH_TILE_CHECK;
 
     // Tile-based early out
-    if (isSky != 0.0 || pixelPos.x >= gRectSize.x || pixelPos.y >= gRectSize.y)
+    if (isSky != 0.0 || any(pixelPos >= gRectSize))
         return;
 
     // Early out
     uint2 sharedMemoryIndex = threadPos.xy + int2(NRD_BORDER, NRD_BORDER);
-#if( NRD_SPEC )
+#if( NRD_HAS_SPEC )
     if (s_SpecNoisy_IsValid[sharedMemoryIndex.y][sharedMemoryIndex.x].w == 0.0)
         return;
 #else
@@ -83,17 +83,17 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 #endif
 
     // Reading history length
-    float historyLength = 255.0 * gIn_HistoryLength[pixelPos];
+    float historyLength = 255.0 * NRD_SURFACE( gIn_HistoryLength, pixelPos );
 
     // Reading normal history
-#if( NRD_SPEC )
+#if( NRD_HAS_SPEC )
     float3 specularResponsiveFirstMomentYCoCg = 0;
     float3 specularResponsiveSecondMomentYCoCg = 0;
     float3 specularNoisyFirstMoment = 0;
     float specularNoisySecondMoment = 0;
 #endif
 
-#if( NRD_DIFF )
+#if( NRD_HAS_DIFF )
     float3 diffuseResponsiveFirstMomentYCoCg = 0;
     float3 diffuseResponsiveSecondMomentYCoCg = 0;
     float3 diffuseNoisyFirstMoment = 0;
@@ -111,18 +111,18 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
             uint2 sharedMemoryIndexP = sharedMemoryIndex + int2(dx, dy);
 
             float w;
-        #if( NRD_SPEC )
+        #if( NRD_HAS_SPEC )
             float4 specularNoisySample = s_SpecNoisy_IsValid[sharedMemoryIndexP.y][sharedMemoryIndexP.x];
             w = specularNoisySample.w;
         #endif
-        #if( NRD_DIFF )
+        #if( NRD_HAS_DIFF )
             float4 diffuseNoisySample = s_DiffNoisy_IsValid[sharedMemoryIndexP.y][sharedMemoryIndexP.x];
             w = diffuseNoisySample.w; // yes, overwrite to the same value
         #endif
 
             if( w != 0.0 )
             {
-            #if( NRD_SPEC )
+            #if( NRD_HAS_SPEC )
                 float3 specularSampleYCoCg = s_SpecResponsiveYCoCg[sharedMemoryIndexP.y][sharedMemoryIndexP.x].rgb;
                 specularResponsiveFirstMomentYCoCg += specularSampleYCoCg;
                 specularResponsiveSecondMomentYCoCg += specularSampleYCoCg * specularSampleYCoCg;
@@ -131,7 +131,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
                 specularNoisyFirstMoment += specularNoisySample.rgb;
                 specularNoisySecondMoment += specularNoisyLuminance * specularNoisyLuminance;
             #endif
-            #if( NRD_DIFF )
+            #if( NRD_HAS_DIFF )
                 float3 diffuseSampleYCoCg = s_DiffResponsiveYCoCg[sharedMemoryIndexP.y][sharedMemoryIndexP.x].rgb;
                 diffuseResponsiveFirstMomentYCoCg += diffuseSampleYCoCg;
                 diffuseResponsiveSecondMomentYCoCg += diffuseSampleYCoCg * diffuseSampleYCoCg;
@@ -146,7 +146,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
         }
     }
 
-#if( NRD_SPEC )
+#if( NRD_HAS_SPEC )
     // Calculating color box
     specularResponsiveFirstMomentYCoCg /= sum;
     specularResponsiveSecondMomentYCoCg /= sum;
@@ -162,7 +162,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     specularResponsiveColorMaxYCoCg = max(specularResponsiveColorMaxYCoCg, specularResponsiveCenterYCoCg.rgb);
 
     // Clamping color with color box expansion
-    float4 specularIlluminationAnd2ndMoment = gIn_Spec[pixelPos];
+    float4 specularIlluminationAnd2ndMoment = NRD_SURFACE( gIn_Spec, pixelPos );
     float3 specularYCoCg = Color::RgbToYCoCg(specularIlluminationAnd2ndMoment.rgb);
     float3 clampedSpecularYCoCg = specularYCoCg;
     if (gSpecMaxFastAccumulatedFrameNum < gSpecMaxAccumulatedFrameNum)
@@ -236,19 +236,19 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     outSpecular.a = max(0, outSpecular.a);
 
     // Writing outputs
-    gOut_Spec[pixelPos.xy] = outSpecular;
-    gOut_SpecFast[pixelPos.xy] = outSpecularResponsive;
+    NRD_SURFACE( gOut_Spec, pixelPos ) = outSpecular;
+    NRD_SURFACE( gOut_SpecFast, pixelPos ) = outSpecularResponsive;
 
-#if( NRD_MODE == SH )
-    RELAX_SH_TYPE specularSH = gIn_SpecSh[pixelPos.xy];
-    RELAX_SH_TYPE specularResponsiveSH = gIn_SpecShFast[pixelPos.xy];
+#if( NRD_MODE == NRD_MODE_SH )
+    RELAX_SH_TYPE specularSH = NRD_SURFACE( gIn_SpecSh, pixelPos.xy );
+    RELAX_SH_TYPE specularResponsiveSH = NRD_SURFACE( gIn_SpecShFast, pixelPos.xy );
 
-    gOut_SpecSh[pixelPos.xy] = lerp(specularSH, specularResponsiveSH, specClampingFactor);
-    gOut_SpecShFast[pixelPos.xy] = specularResponsiveSH;
+    NRD_SURFACE( gOut_SpecSh, pixelPos ) = lerp(specularSH, specularResponsiveSH, specClampingFactor);
+    NRD_SURFACE( gOut_SpecShFast, pixelPos ) = specularResponsiveSH;
 #endif
 #endif
 
-#if( NRD_DIFF )
+#if( NRD_HAS_DIFF )
     // Calculating color box
     diffuseResponsiveFirstMomentYCoCg /= sum;
     diffuseResponsiveSecondMomentYCoCg /= sum;
@@ -265,7 +265,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 
 
     // Clamping color with color box expansion
-    float4 diffuseIlluminationAnd2ndMoment = gIn_Diff[pixelPos];
+    float4 diffuseIlluminationAnd2ndMoment = NRD_SURFACE( gIn_Diff, pixelPos );
     float3 diffuseYCoCg = Color::RgbToYCoCg(diffuseIlluminationAnd2ndMoment.rgb);
     float3 clampedDiffuseYCoCg = diffuseYCoCg;
     if (gDiffMaxFastAccumulatedFrameNum < gDiffMaxAccumulatedFrameNum)
@@ -337,18 +337,18 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     outDiffuse.a = max(0, outDiffuse.a);
 
     // Writing outputs
-    gOut_Diff[pixelPos.xy] = outDiffuse;
-    gOut_DiffFast[pixelPos.xy] = outDiffuseResponsive;
+    NRD_SURFACE( gOut_Diff, pixelPos ) = outDiffuse;
+    NRD_SURFACE( gOut_DiffFast, pixelPos ) = outDiffuseResponsive;
 
-    #if( NRD_MODE == SH )
-        RELAX_SH_TYPE diffuseSH = gIn_DiffSh[pixelPos.xy];
-        RELAX_SH_TYPE diffuseResponsiveSH = gIn_DiffShFast[pixelPos.xy];
+    #if( NRD_MODE == NRD_MODE_SH )
+        RELAX_SH_TYPE diffuseSH = NRD_SURFACE( gIn_DiffSh, pixelPos.xy );
+        RELAX_SH_TYPE diffuseResponsiveSH = NRD_SURFACE( gIn_DiffShFast, pixelPos.xy );
 
-        gOut_DiffSh[pixelPos.xy] = lerp(diffuseSH, diffuseResponsiveSH, diffClampingFactor);
-        gOut_DiffShFast[pixelPos.xy] = diffuseResponsiveSH;
+        NRD_SURFACE( gOut_DiffSh, pixelPos ) = lerp(diffuseSH, diffuseResponsiveSH, diffClampingFactor);
+        NRD_SURFACE( gOut_DiffShFast, pixelPos ) = diffuseResponsiveSH;
     #endif
 #endif
 
     // Writing out history length for use in the next frame
-    gOut_HistoryLength[pixelPos] = historyLength / 255.0;
+    NRD_SURFACE( gOut_HistoryLength, pixelPos ) = historyLength / 255.0;
 }

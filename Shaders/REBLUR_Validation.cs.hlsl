@@ -16,8 +16,8 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 #include "Common.hlsli"
 
-#undef NRD_SPEC
-#define NRD_SPEC 1 // see "UnpackData2"
+#undef NRD_HAS_SPEC
+#define NRD_HAS_SPEC 1 // see "UnpackData2"
 
 #include "REBLUR_Common.hlsli"
 
@@ -37,52 +37,59 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 {
     NRD_CTA_ORDER_DEFAULT;
 
+    if( any( pixelPos > gRectSizeMinusOne ) )
+        return;
+
     if( gResetHistory != 0 )
     {
-        gOut_Validation[ pixelPos ] = 0;
+        NRD_SURFACE( gOut_Validation, pixelPos ) = 0;
         return;
     }
 
-    float2 pixelUv = float2( pixelPos + 0.5 ) / gResourceSize;
+    float2 pixelUv = float2( pixelPos + 0.5 ) / gRectSize;
 
     float2 viewportUv = frac( pixelUv / VIEWPORT_SIZE );
     float2 viewportId = floor( pixelUv / VIEWPORT_SIZE );
     float viewportIndex = viewportId.y / VIEWPORT_SIZE + viewportId.x;
 
     float2 viewportUvScaled = viewportUv * gResolutionScale;
+    int2 viewportPixelPos = int2( viewportUvScaled * gResourceSize );
+    int2 diffPixelPos = int2( viewportUvScaled * float2( gDiffCheckerboard != 2 ? 0.5 : 1.0, 1.0 ) * gResourceSize );
+    int2 specPixelPos = int2( viewportUvScaled * float2( gSpecCheckerboard != 2 ? 0.5 : 1.0, 1.0 ) * gResourceSize );
 
-    float4 normalAndRoughness = NRD_FrontEnd_UnpackNormalAndRoughness( gIn_Normal_Roughness.SampleLevel( gNearestClamp, WithRectOffset( viewportUvScaled ), 0 ) );
-    float viewZ = UnpackViewZ( gIn_ViewZ.SampleLevel( gNearestClamp, WithRectOffset( viewportUvScaled ), 0 ) );
-    float3 mv = gIn_Mv.SampleLevel( gNearestClamp, WithRectOffset( viewportUvScaled ), 0 ) * gMvScale.xyz;
-    float4 diff = gIn_Diff.SampleLevel( gNearestClamp, viewportUvScaled * float2( gDiffCheckerboard != 2 ? 0.5 : 1.0, 1.0 ), 0 );
-    float4 spec = gIn_Spec.SampleLevel( gNearestClamp, viewportUvScaled * float2( gSpecCheckerboard != 2 ? 0.5 : 1.0, 1.0 ), 0 );
+    float4 normalAndRoughness = NRD_FrontEnd_UnpackNormalAndRoughness( NRD_SURFACE( gIn_Normal_Roughness, viewportPixelPos ) );
+    float viewZ = UnpackViewZ( NRD_SURFACE( gIn_ViewZ, viewportPixelPos ) );
+    float3 mv = NRD_SURFACE( gIn_Mv, viewportPixelPos ) * gMvScale.xyz + gMvBias.xyz;
+    float4 diff = NRD_SURFACE( gIn_Diff, diffPixelPos );
+    float4 spec = NRD_SURFACE( gIn_Spec, specPixelPos );
 
     // See "UnpackData1"
-    REBLUR_DATA1_TYPE data1 = gIn_Data1.SampleLevel( gNearestClamp, viewportUvScaled, 0 );
+    REBLUR_DATA1_TYPE data1 = NRD_SURFACE( gIn_Data1, viewportPixelPos );
     if( !gHasDiffuse )
         data1.y = data1.x;
     data1 *= REBLUR_MAX_ACCUM_FRAME_NUM;
 
     uint bits;
     bool smbAllowCatRom;
-    float2 data2 = UnpackData2( gIn_Data2[ uint2( viewportUvScaled * gResourceSize ) ], bits, smbAllowCatRom );
+    float2 data2 = UnpackData2( NRD_SURFACE( gIn_Data2, uint2( viewportUv * gRectSize ) ), bits, smbAllowCatRom );
 
     float3 N = normalAndRoughness.xyz;
     float roughness = normalAndRoughness.w;
 
-    float3 Xv = Geometry::ReconstructViewPosition( viewportUv, gFrustum, abs( viewZ ), gOrthoMode );
+    float2 viewportPixelUv = float2( viewportPixelPos + 0.5 ) * gRectSizeInv;
+    float3 Xv = Geometry::ReconstructViewPosition( viewportPixelUv, gFrustum, abs( viewZ ), gOrthoMode );
     float3 X = Geometry::RotateVector( gViewToWorld, Xv );
 
     bool isInf = !IsInDenoisingRange( abs( viewZ ) );
     bool checkerboard = Sequence::CheckerBoard( pixelPos >> 2, 0 );
 
-    uint4 textState = Text::Init( pixelPos, viewportId * gResourceSize * VIEWPORT_SIZE + OFFSET, 1 );
+    uint4 textState = Text::Init( pixelPos, uint2( viewportId * gRectSize * VIEWPORT_SIZE + OFFSET ), 1 );
 
-    float4 result = gOut_Validation[ pixelPos ];
+    float4 result = NRD_SURFACE( gOut_Validation, pixelPos );
 
-    // World-space normal
-    if( viewportIndex == 0 )
+    if( viewportIndex == 4 )
     {
+        // World-space normal
         Text::Print_ch( 'N', textState );
         Text::Print_ch( 'O', textState );
         Text::Print_ch( 'R', textState );
@@ -97,9 +104,9 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
         result.xyz = N * 0.5 + 0.5;
         result.w = 1.0;
     }
-    // Linear roughness
     else if( viewportIndex == 1 )
     {
+        // Linear roughness
         Text::Print_ch( 'R', textState );
         Text::Print_ch( 'O', textState );
         Text::Print_ch( 'U', textState );
@@ -116,9 +123,9 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
         result.xyz = normalAndRoughness.w;
         result.w = 1.0;
     }
-    // View Z
     else if( viewportIndex == 2 )
     {
+        // View Z
         Text::Print_ch( 'Z', textState );
         if( viewZ < 0 )
             Text::Print_ch( Text::Char_Minus, textState );
@@ -129,62 +136,87 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
         result.xyz = isInf ? float3( 1, 0, 0 ) : color * f;
         result.w = 1.0;
     }
-    // MV
     else if( viewportIndex == 3 )
     {
+        // MV
         Text::Print_ch( 'M', textState );
         Text::Print_ch( 'V', textState );
 
         float2 viewportUvPrevExpected = Geometry::GetScreenUv( gWorldToClipPrev, X );
 
-        float2 viewportUvPrev = viewportUv + mv.xy;
+        float2 viewportUvPrev = viewportPixelUv + mv.xy;
         if( gMvScale.w != 0.0 )
             viewportUvPrev = Geometry::GetScreenUv( gWorldToClipPrev, X + mv );
 
         float2 uvDelta = ( viewportUvPrev - viewportUvPrevExpected ) * gRectSize;
 
-        result.xyz = IsInScreenNearest( viewportUvPrev ) ? float3( abs( uvDelta ), 0 ) : float3( 0, 0, 1 );
+        bool isMvLikelyJittered = false;
+        if( gMvScale.w == 0.0 && length( gJitter ) > 0.01 )
+        {
+            float jitterError = length( uvDelta - gJitter );
+            float noJitterError = length( uvDelta );
+
+            isMvLikelyJittered = jitterError < noJitterError && jitterError < 0.1;
+        }
+        result.xyz = isMvLikelyJittered ? float3( 1, 0, 1 ) : float3( abs( uvDelta ), 0 );
+
+        result.xyz = IsInScreenNearest( viewportUvPrev ) ? result.xyz : float3( 0, 0, 1 );
         result.w = 1.0;
     }
-    // World units, jitter and rotators
-    else if( viewportIndex == 4 )
+    else if( viewportIndex == 0 )
     {
+        // World units
         Text::Print_ch( 'U', textState );
         Text::Print_ch( 'N', textState );
         Text::Print_ch( 'I', textState );
         Text::Print_ch( 'T', textState );
         Text::Print_ch( 'S', textState );
 
-        float2 dim = float2( 0.5 * gResourceSize.y / gResourceSize.x, 0.5 );
-        float2 dimInPixels = gResourceSize * VIEWPORT_SIZE * dim;
+        const float2 MINI_DIM = float2( gResourceSize.y / gResourceSize.x, 1.0) * gResourceSize / 15.0;
+        const float MIN_OFFSET = 16.0;
 
-        float2 remappedUv = ( viewportUv - ( 1.0 - dim ) ) / dim;
-        float2 remappedUv2 = ( viewportUv - float2( 1.0 - dim.x, 0.0 ) ) / dim;
+        float2 dim = MINI_DIM / gRectSize;
+        float2 origin = float2( 0.0, MIN_OFFSET ) / gRectSize;
+        float2 jitterUv = ( pixelUv - origin ) / dim;
+        float2 rotatorUv = ( pixelUv - origin - float2( dim.x, 0.0 ) ) / dim;
+        uint frameIndex = ( gFrameIndex >> 2 ) % uint( gMaxAccumulatedFrameNum + 1.0 );
 
-        if( all( remappedUv > 0.0 ) )
+        if( all( jitterUv > 0.0 ) && all( jitterUv < 1.0 ) )
         {
-            // Jitter
+            // Nano viewport: jitter
             float2 uv = gJitter + 0.5;
             bool isValid = all( saturate( uv ) == uv );
-            int2 a = int2( saturate( uv ) * dimInPixels );
-            int2 b = int2( remappedUv * dimInPixels );
+            int2 a = int2( saturate( uv ) * MINI_DIM );
+            int2 b = int2( jitterUv * MINI_DIM );
+            float3 color = 0.66;
 
+            { // Detect projection matrix jittering
+                float2 centerUv = -gFrustum.xy / gFrustum.zw;
+                float2 centerUvPrev = -gFrustumPrev.xy / gFrustumPrev.zw;
+                float2 centerDeltaInPixels = ( centerUv - centerUvPrev ) * gRectSize;
+
+                if( length( centerDeltaInPixels ) > 1e-3 )
+                    color = float3( 1.0, 0.0, 0.0 );
+            }
+
+            // Good
             if( all( abs( a - b ) <= 1 ) && isValid )
-                result.xyz = 0.66;
+                result.xyz = color;
 
+            // Out of bounds
             if( all( abs( a - b ) <= 3 ) && !isValid )
                 result.xyz = float3( 1.0, 0.0, 0.0 );
-        }
-        else if( all( remappedUv2 > 0.0 ) )
-        {
-            // Rotators
-            int2 b = int2( remappedUv2 * dimInPixels );
 
-            uint frameIndex = ( gFrameIndex >> 2 ) % gMaxAccumulatedFrameNum;
+            result.xyz = frameIndex == 0 ? 0 : saturate( result.xyz );
+        }
+        else if( all( rotatorUv > 0.0 ) && all( rotatorUv < 1.0 ) )
+        {
+            // Nano viewport: rotators
+            int2 b = int2( rotatorUv * MINI_DIM );
 
             float scale = 0.5; // [ -0.5; 0.5 ]
             scale /= max( REBLUR_BLUR_RADIUS_SCALE, REBLUR_POST_BLUR_RADIUS_SCALE ); // normalize
-            scale *= Math::Sqrt01( GetAdvancedNonLinearAccumSpeed( frameIndex ) ); // area factor ( see "REBLUR_Common_SpatialFilter.hlsli" )
+            scale *= Math::Sqrt01( GetAdvancedNonLinearAccumSpeed( float( frameIndex ) ) ); // area factor ( see "REBLUR_Common_SpatialFilter.hlsli" )
 
             [unroll]
             for( uint n = 0; n < 8; n++ )
@@ -193,20 +225,20 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 
                 {
                     float2 uv = 0.5 + Geometry::RotateVector( gRotator, offset * REBLUR_BLUR_RADIUS_SCALE );
-                    int2 a = int2( saturate( uv ) * dimInPixels );
+                    int2 a = int2( saturate( uv ) * MINI_DIM );
 
                     result.x += all( abs( a - b ) <= 1 );
                 }
 
                 {
                     float2 uv = 0.5 + Geometry::RotateVector( gRotatorPost, offset * REBLUR_POST_BLUR_RADIUS_SCALE );
-                    int2 a = int2( saturate( uv ) * dimInPixels );
+                    int2 a = int2( saturate( uv ) * MINI_DIM );
 
                     result.y += all( abs( a - b ) <= 1 );
                 }
             }
 
-            result = frameIndex == 0 ? 0 : saturate( result );
+            result.xyz = frameIndex == 0 ? 0 : saturate( result.xyz );
         }
         else
         {
@@ -218,9 +250,9 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 
         result.w = 1.0;
     }
-    // Virtual history
     else if( viewportIndex == 7 && gHasSpecular )
     {
+        // Virtual history
         Text::Print_ch( 'V', textState );
         Text::Print_ch( 'I', textState );
         Text::Print_ch( 'R', textState );
@@ -240,9 +272,9 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
         result.xyz = data2.x * float( !isInf );
         result.w = 1.0;
     }
-    // Diffuse frames
     else if( viewportIndex == 8 && gHasDiffuse )
     {
+        // Diffuse frames
         Text::Print_ch( 'D', textState );
         Text::Print_ch( 'I', textState );
         Text::Print_ch( 'F', textState );
@@ -261,9 +293,9 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
         result.xyz = Color::ColorizeZucconi( viewportUv.y > 0.95 ? 1.0 - viewportUv.x : f * float( !isInf ) );
         result.w = 1.0;
     }
-    // Specular frames
     else if( viewportIndex == 11 && gHasSpecular )
     {
+        // Specular frames
         Text::Print_ch( 'S', textState );
         Text::Print_ch( 'P', textState );
         Text::Print_ch( 'E', textState );
@@ -282,9 +314,9 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
         result.xyz = Color::ColorizeZucconi( viewportUv.y > 0.95 ? 1.0 - viewportUv.x : f * float( !isInf ) );
         result.w = 1.0;
     }
-    // Diff hitT
     else if( viewportIndex == 12 && gHasDiffuse )
     {
+        // Diff hitT
         Text::Print_ch( 'D', textState );
         Text::Print_ch( 'I', textState );
         Text::Print_ch( 'F', textState );
@@ -303,9 +335,9 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
         result.xyz *= float( !isInf );
         result.w = 1.0;
     }
-    // Spec hitT
     else if( viewportIndex == 15 && gHasSpecular )
     {
+        // Spec hitT
         Text::Print_ch( 'S', textState );
         Text::Print_ch( 'P', textState );
         Text::Print_ch( 'E', textState );
@@ -324,10 +356,12 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
         result.xyz *= float( !isInf );
         result.w = 1.0;
     }
+    else
+        result = 0;
 
-    // Text
     if( Text::IsForeground( textState ) )
     {
+        // Text
         float lum = Color::Luminance( result.xyz );
         result.xyz = lerp( 0.0, 1.0 - result.xyz, saturate( abs( lum - 0.5 ) / 0.25 ) ) ;
 
@@ -336,5 +370,5 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     }
 
     // Output
-    gOut_Validation[ pixelPos ] = result;
+    NRD_SURFACE( gOut_Validation, pixelPos ) = result;
 }

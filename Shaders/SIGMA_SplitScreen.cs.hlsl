@@ -27,12 +27,17 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     if( pixelUv.x > gSplitScreen || any( pixelPos > gRectSizeMinusOne ) )
         return;
 
-    float2 data = gIn_Penumbra[ pixelPos ];
-    float viewZ = UnpackViewZ( gIn_ViewZ[ WithRectOrigin( pixelPos ) ] );
+    uint2 inputPos = pixelPos;
+    #if( NRD_SUPPORTS_CHECKERBOARD == 1 )
+        inputPos.x >>= gCheckerboard == 2 ? 0 : 1;
+    #endif
+
+    float2 data = NRD_SURFACE( gIn_Penumbra, inputPos );
+    float viewZ = UnpackViewZ( NRD_SURFACE( gIn_ViewZ, pixelPos ) );
 
     SIGMA_TYPE s;
     #if( TRANSLUCENCY == 1 )
-        s = gIn_Shadow_Translucency[ pixelPos ];
+        s = NRD_SURFACE( gIn_Shadow_Translucency, inputPos );
     #else
         s = IsLit( data.x );
     #endif
@@ -41,5 +46,5 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
         s = PackShadow( data.x );
     #endif
 
-    gOut_Shadow_Translucency[ pixelPos ] = s * float( IsInDenoisingRange( viewZ ) );
+    NRD_SURFACE( gOut_Shadow_Translucency, pixelPos ) = s * float( IsInDenoisingRange( viewZ ) );
 }

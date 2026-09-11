@@ -74,7 +74,7 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
         PushInput(AsUint(spec)); \
         PushOutput(AsUint(ResourceType::OUT_VALIDATION)); \
         std::array<ShaderMake::ShaderConstant, 0> defines = {}; \
-        AddDispatchWithArgs(REBLUR_Validation, defines, IGNORE_RS, 1); \
+        AddDispatch(REBLUR_Validation, defines); \
     }
 
 struct ReblurProps {
@@ -136,16 +136,18 @@ void nrd::InstanceImpl::Update_Reblur(const DenoiserData& denoiserData) {
         uint32_t passIndex = AsUint(Dispatch::HITDIST_RECONSTRUCTION)
             + (settings.hitDistanceReconstructionMode == HitDistanceReconstructionMode::AREA_5X5 ? 2 : 0)
             + (!skipPrePass ? 1 : 0);
-        void* consts = PushDispatch(denoiserData, passIndex);
+        REBLUR_HitDistReconstructionConstants* consts = (REBLUR_HitDistReconstructionConstants*)PushDispatch(denoiserData, passIndex);
         AddSharedConstants_Reblur(settings, consts);
+        consts->gDispatchOutputRectOrigin = skipPrePass ? consts->gOutputRectOrigin : int2(0, 0);
     }
 
     // PREPASS
     if (!skipPrePass) {
         uint32_t passIndex = AsUint(Dispatch::PREPASS)
             + (enableHitDistanceReconstruction ? 1 : 0);
-        void* consts = PushDispatch(denoiserData, passIndex);
+        REBLUR_PrePassConstants* consts = (REBLUR_PrePassConstants*)PushDispatch(denoiserData, passIndex);
         AddSharedConstants_Reblur(settings, consts);
+        consts->gDispatchInputRectOrigin = enableHitDistanceReconstruction ? int2(0, 0) : consts->gInputRectOrigin;
     }
 
     { // TEMPORAL_ACCUMULATION
@@ -153,8 +155,9 @@ void nrd::InstanceImpl::Update_Reblur(const DenoiserData& denoiserData) {
             + (m_CommonSettings.isDisocclusionThresholdMixAvailable ? 4 : 0)
             + (m_CommonSettings.isHistoryConfidenceAvailable ? 2 : 0)
             + ((!skipPrePass || enableHitDistanceReconstruction) ? 1 : 0);
-        void* consts = PushDispatch(denoiserData, passIndex);
+        REBLUR_TemporalAccumulationConstants* consts = (REBLUR_TemporalAccumulationConstants*)PushDispatch(denoiserData, passIndex);
         AddSharedConstants_Reblur(settings, consts);
+        consts->gDispatchInputRectOrigin = (!skipPrePass || enableHitDistanceReconstruction) ? consts->gOutputRectOrigin : consts->gInputRectOrigin;
     }
 
     { // HISTORY_FIX
@@ -193,8 +196,8 @@ void nrd::InstanceImpl::Update_Reblur(const DenoiserData& denoiserData) {
     if (m_CommonSettings.enableValidation) {
         REBLUR_ValidationConstants* consts = (REBLUR_ValidationConstants*)PushDispatch(denoiserData, AsUint(Dispatch::VALIDATION));
         AddSharedConstants_Reblur(settings, consts);
-        consts->gHasDiffuse = props.hasDiffuse ? 1 : 0;   // TODO: push constant
-        consts->gHasSpecular = props.hasSpecular ? 1 : 0; // TODO: push constant
+        consts->gHasDiffuse = props.hasDiffuse ? 1 : 0;
+        consts->gHasSpecular = props.hasSpecular ? 1 : 0;
     }
 }
 
@@ -234,8 +237,9 @@ void nrd::InstanceImpl::Update_ReblurOcclusion(const DenoiserData& denoiserData)
     if (enableHitDistanceReconstruction) {
         uint32_t passIndex = AsUint(Dispatch::HITDIST_RECONSTRUCTION)
             + (settings.hitDistanceReconstructionMode == HitDistanceReconstructionMode::AREA_5X5 ? 1 : 0);
-        void* consts = PushDispatch(denoiserData, passIndex);
+        REBLUR_HitDistReconstructionConstants* consts = (REBLUR_HitDistReconstructionConstants*)PushDispatch(denoiserData, passIndex);
         AddSharedConstants_Reblur(settings, consts);
+        consts->gDispatchOutputRectOrigin = consts->gOutputRectOrigin;
     }
 
     { // TEMPORAL_ACCUMULATION
@@ -243,8 +247,9 @@ void nrd::InstanceImpl::Update_ReblurOcclusion(const DenoiserData& denoiserData)
             + (m_CommonSettings.isDisocclusionThresholdMixAvailable ? 4 : 0)
             + (m_CommonSettings.isHistoryConfidenceAvailable ? 2 : 0)
             + (enableHitDistanceReconstruction ? 1 : 0);
-        void* consts = PushDispatch(denoiserData, passIndex);
+        REBLUR_TemporalAccumulationConstants* consts = (REBLUR_TemporalAccumulationConstants*)PushDispatch(denoiserData, passIndex);
         AddSharedConstants_Reblur(settings, consts);
+        consts->gDispatchInputRectOrigin = enableHitDistanceReconstruction ? consts->gOutputRectOrigin : consts->gInputRectOrigin;
     }
 
     { // HISTORY_FIX
@@ -275,8 +280,8 @@ void nrd::InstanceImpl::Update_ReblurOcclusion(const DenoiserData& denoiserData)
     if (m_CommonSettings.enableValidation) {
         REBLUR_ValidationConstants* consts = (REBLUR_ValidationConstants*)PushDispatch(denoiserData, AsUint(Dispatch::VALIDATION));
         AddSharedConstants_Reblur(settings, consts);
-        consts->gHasDiffuse = props.hasDiffuse ? 1 : 0;   // TODO: push constant
-        consts->gHasSpecular = props.hasSpecular ? 1 : 0; // TODO: push constant
+        consts->gHasDiffuse = props.hasDiffuse ? 1 : 0;
+        consts->gHasSpecular = props.hasSpecular ? 1 : 0;
     }
 }
 
@@ -330,6 +335,7 @@ void nrd::InstanceImpl::AddSharedConstants_Reblur(const ReblurSettings& settings
     consts->gViewVectorWorld = m_ViewDirection.xmm;
     consts->gViewVectorWorldPrev = m_ViewDirectionPrev.xmm;
     consts->gMvScale = float4(m_CommonSettings.motionVectorScale[0], m_CommonSettings.motionVectorScale[1], m_CommonSettings.motionVectorScale[2], m_CommonSettings.isMotionVectorInWorldSpace ? 1.0f : 0.0f);
+    consts->gMvBias = float4(m_CommonSettings.motionVectorBias[0], m_CommonSettings.motionVectorBias[1], m_CommonSettings.motionVectorBias[2], 0.0f);
     consts->gConvergenceSettings = float4(settings.convergenceSettings.s, settings.convergenceSettings.b, settings.convergenceSettings.p, 0.0f);
     consts->gAntilagSettings = float2(settings.antilagSettings.luminanceSigmaScale, settings.antilagSettings.luminanceSensitivity);
     consts->gResourceSize = float2(float(resourceW), float(resourceH));
@@ -340,10 +346,12 @@ void nrd::InstanceImpl::AddSharedConstants_Reblur(const ReblurSettings& settings
     consts->gRectSizePrev = float2(float(rectWprev), float(rectHprev));
     consts->gResolutionScale = float2(float(rectW) / float(resourceW), float(rectH) / float(resourceH));
     consts->gResolutionScalePrev = float2(float(rectWprev) / float(resourceWprev), float(rectHprev) / float(resourceHprev));
-    consts->gRectOffset = float2(float(m_CommonSettings.rectOrigin[0]) / float(resourceW), float(m_CommonSettings.rectOrigin[1]) / float(resourceH));
     consts->gJitter = float2(m_CommonSettings.cameraJitter[0], m_CommonSettings.cameraJitter[1]);
     consts->gPrintfAt = uint2(m_CommonSettings.printfAt[0], m_CommonSettings.printfAt[1]);
-    consts->gRectOrigin = uint2(m_CommonSettings.rectOrigin[0], m_CommonSettings.rectOrigin[1]);
+    consts->gInputRectOrigin = int2(m_CommonSettings.inputRectOrigin[0], m_CommonSettings.inputRectOrigin[1]);
+    consts->gOutputRectOrigin = int2(m_CommonSettings.outputRectOrigin[0], m_CommonSettings.outputRectOrigin[1]);
+    consts->gDispatchInputRectOrigin = int2(0, 0);
+    consts->gDispatchOutputRectOrigin = int2(0, 0);
     consts->gRectSizeMinusOne = int2(rectW - 1, rectH - 1);
     consts->gDisocclusionThreshold = m_CommonSettings.disocclusionThreshold + disocclusionThresholdBonus;
     consts->gDisocclusionThresholdAlternate = m_CommonSettings.disocclusionThresholdAlternate + disocclusionThresholdBonus;
@@ -356,7 +364,8 @@ void nrd::InstanceImpl::AddSharedConstants_Reblur(const ReblurSettings& settings
     consts->gUnproject = unproject;
     consts->gDenoisingRange = m_CommonSettings.denoisingRange;
     consts->gPlaneDistSensitivity = settings.planeDistanceSensitivity;
-    consts->gFramerateScale = m_FrameRateScale;
+    consts->gFrameRateScale = m_FrameRateScale;
+    consts->gFrameRateScaleSmoothed = m_FrameRateScaleSmoothed;
     consts->gMaxBlurRadius = max(maxBlurRadius, settings.minBlurRadius);
     consts->gMinBlurRadius = settings.minBlurRadius;
     consts->gDiffPrepassBlurRadius = diffusePrepassBlurRadius;

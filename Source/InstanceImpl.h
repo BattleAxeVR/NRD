@@ -26,17 +26,10 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 // "NRDConfig.hlsli", included in "NRD.hlsli", must be visible in all files!
 #include "../Shaders/NRD.hlsli"
 
-// See "Shaders.cfg" and "NRD.hlsli"
-#define NRD_DIFFUSE          "DIFF"
-#define NRD_SPECULAR         "SPEC"
-#define NRD_DIFFUSE_SPECULAR "BOTH"
-#define NRD_RADIANCE         "RADIANCE"
-#define NRD_SH               "SH"
-#define NRD_OCCLUSION        "OCCLUSION"
-#define NRD_DO               "DO"
-
 #define _NRD_STRINGIFY(s) #s
 #define NRD_STRINGIFY(s)  _NRD_STRINGIFY(s)
+
+#define NRD_MAKE_SHADER_CONSTANT(name, value) ShaderMake::ShaderConstant{#name, #value}
 
 #if NRD_EMBEDS_DXBC_SHADERS
 #    define FillDXBC(blobName, defines, computeShader) ShaderMake::FindPermutationInBlob(g_##blobName##_cs_dxbc, GetCountOf(g_##blobName##_cs_dxbc), defines.data(), (uint32_t)defines.size(), &computeShader.bytecode, (size_t*)&computeShader.size)
@@ -150,7 +143,6 @@ constexpr uint16_t TRANSIENT_POOL_START = 2000;
 constexpr size_t CONSTANT_DATA_SIZE = 128 * 1024; // TODO: improve
 
 constexpr uint16_t USE_PREV_DIMS = 0xFFFF;
-constexpr uint16_t IGNORE_RS = 0xFFFE;
 
 inline uint16_t DivideUp(uint32_t x, uint16_t y) {
     return uint16_t((x + y - 1) / y);
@@ -313,6 +305,7 @@ private:
     // Available in denoiser implementations
 private:
     void AddTextureToTransientPool(const TextureDesc& textureDesc);
+    void* PushDispatch(const InternalDispatchDesc& internalDispatchDesc, Identifier identifier, const ResourceDesc* resources, uint32_t resourcesNum, uint16_t w, uint16_t h);
     void* PushDispatch(const DenoiserData& denoiserData, uint32_t localIndex);
 
     inline void AddTextureToPermanentPool(const TextureDesc& textureDesc) {
@@ -380,7 +373,9 @@ private:
     float m_CheckerboardResolveAccumSpeed = 0.0f;
     float m_JitterDelta = 0.0f;
     float m_TimeDelta = 0.0f;
+    float m_TimeDeltaSmoothed = 16.66f;
     float m_FrameRateScale = 0.0f;
+    float m_FrameRateScaleSmoothed = 1.0f;
     float m_ProjectY = 0.0f;
     uint32_t m_AccumulatedFrameNum = 0;
     uint16_t m_TransientPoolOffset = 0;

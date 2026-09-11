@@ -35,7 +35,7 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 #define REBLUR_USE_SCREEN_SPACE_SAMPLING_FOR_SPECULAR           0 // specular is more complicated
 #define REBLUR_USE_DECOMPRESSED_HIT_DIST_IN_RECONSTRUCTION      0 // compression helps to preserve "lobe important" values
 
-#if( NRD_MODE == OCCLUSION || NRD_MODE == DO )
+#if( NRD_MODE == NRD_MODE_OCCLUSION || NRD_MODE == NRD_MODE_DO )
     #undef NRD_SUPPORTS_ANTIFIREFLY
     #define NRD_SUPPORTS_ANTIFIREFLY                            0 // not needed in occlusion mode
 #endif
@@ -84,6 +84,11 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 #define REBLUR_POST_BLUR_FRACTION_SCALE                         0.5
 #define REBLUR_POST_BLUR_RADIUS_SCALE                           2.0
 
+// 1.0                    - frame-based ( old behavior )
+// gFrameRateScale * 1.0  - time-based matching "old @ 60 FPS"
+// gFrameRateScale * 0.75 - time-based matching "old @ 80 FPS" ( a bit more relaxed, better for FPS < 60 )
+#define REBLUR_FRAME_RATE_COMPENSATION                          ( gFrameRateScale * 0.75 )
+
 #define REBLUR_NORMAL_ULP                                       0.0 // was "NRD_NORMAL_ENCODING_ERROR"
 #define REBLUR_ALMOST_ZERO_ANGLE                                cos( Math::DegToRad( 89.0 ) )
 #define REBLUR_VIRTUAL_MOTION_PREV_PREV_WEIGHT_ITERATION_NUM    1 // TODO: 2?
@@ -100,7 +105,7 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 #define REBLUR_INVALID                                          -32768.0 // marks INF pixels, which must be ignored in SMEM involved calculations
 
 // Data types
-#if( NRD_MODE == OCCLUSION )
+#if( NRD_MODE == NRD_MODE_OCCLUSION )
     #define REBLUR_TYPE                                         float
 #else
     #define REBLUR_TYPE                                         float4
@@ -129,6 +134,7 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
     NRD_CONSTANT( float4, gViewVectorWorld ) \
     NRD_CONSTANT( float4, gViewVectorWorldPrev ) \
     NRD_CONSTANT( float4, gMvScale ) \
+    NRD_CONSTANT( float4, gMvBias ) \
     NRD_CONSTANT( float4, gConvergenceSettings ) \
     NRD_CONSTANT( float2, gAntilagSettings ) \
     NRD_CONSTANT( float2, gResourceSize ) \
@@ -139,10 +145,12 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
     NRD_CONSTANT( float2, gRectSizePrev ) \
     NRD_CONSTANT( float2, gResolutionScale ) \
     NRD_CONSTANT( float2, gResolutionScalePrev ) \
-    NRD_CONSTANT( float2, gRectOffset ) \
     NRD_CONSTANT( float2, gJitter ) \
     NRD_CONSTANT( uint2, gPrintfAt ) \
-    NRD_CONSTANT( uint2, gRectOrigin ) \
+    NRD_CONSTANT( int2, gInputRectOrigin ) \
+    NRD_CONSTANT( int2, gOutputRectOrigin ) \
+    NRD_CONSTANT( int2, gDispatchInputRectOrigin ) \
+    NRD_CONSTANT( int2, gDispatchOutputRectOrigin ) \
     NRD_CONSTANT( int2, gRectSizeMinusOne ) \
     NRD_CONSTANT( float, gDisocclusionThreshold ) \
     NRD_CONSTANT( float, gDisocclusionThresholdAlternate ) \
@@ -155,7 +163,8 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
     NRD_CONSTANT( float, gUnproject ) \
     NRD_CONSTANT( float, gDenoisingRange ) \
     NRD_CONSTANT( float, gPlaneDistSensitivity ) \
-    NRD_CONSTANT( float, gFramerateScale ) \
+    NRD_CONSTANT( float, gFrameRateScale ) \
+    NRD_CONSTANT( float, gFrameRateScaleSmoothed ) \
     NRD_CONSTANT( float, gMinBlurRadius ) \
     NRD_CONSTANT( float, gMaxBlurRadius ) \
     NRD_CONSTANT( float, gDiffPrepassBlurRadius ) \
@@ -194,7 +203,7 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 // ( Optional ) This can provide a minor performance boost by sacrificing IQ a bit.
 // The negative effect is minimal if SH resolve is in use
 /*
-#if( NRD_MODE == DO || NRD_MODE == SH )
+#if( NRD_MODE == NRD_MODE_DO || NRD_MODE == NRD_MODE_SH )
     #undef REBLUR_USE_CATROM_FOR_SURFACE_MOTION_IN_TA
     #define REBLUR_USE_CATROM_FOR_SURFACE_MOTION_IN_TA          0
 

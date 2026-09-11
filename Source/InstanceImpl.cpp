@@ -227,7 +227,7 @@ nrd::Result nrd::InstanceImpl::Create(const InstanceCreationDesc& instanceCreati
         std::array<ShaderMake::ShaderConstant, 1> defines = {
             {{"FLOAT", "1"}},
         };
-        AddDispatchNoConstants(Clear, defines);
+        AddDispatch(Clear, defines);
     }
 
     m_DispatchClearIndex[1] = m_Dispatches.size();
@@ -238,7 +238,7 @@ nrd::Result nrd::InstanceImpl::Create(const InstanceCreationDesc& instanceCreati
         std::array<ShaderMake::ShaderConstant, 1> defines = {
             {{"FLOAT", "0"}},
         };
-        AddDispatchNoConstants(Clear, defines);
+        AddDispatch(Clear, defines);
     }
 
     PrepareDesc();
@@ -251,13 +251,12 @@ nrd::Result nrd::InstanceImpl::Create(const InstanceCreationDesc& instanceCreati
 nrd::Result nrd::InstanceImpl::SetCommonSettings(const CommonSettings& commonSettings) {
     m_SplitScreenPrev = m_CommonSettings.splitScreen;
 
+    bool isNewFrame = m_IsFirstUse || m_CommonSettings.frameIndex != commonSettings.frameIndex; // prev != curr
     memcpy(&m_CommonSettings, &commonSettings, sizeof(commonSettings));
 
     // Silently fix settings for known cases
-    if (m_IsFirstUse) {
+    if (m_IsFirstUse)
         m_CommonSettings.accumulationMode = AccumulationMode::CLEAR_AND_RESTART;
-        m_IsFirstUse = false;
-    }
 
     if (m_CommonSettings.accumulationMode != AccumulationMode::CONTINUE) {
         m_SplitScreenPrev = 0.0f;
@@ -291,6 +290,12 @@ nrd::Result nrd::InstanceImpl::SetCommonSettings(const CommonSettings& commonSet
     isValid &= m_CommonSettings.rectSizePrev[0] != 0 && m_CommonSettings.rectSizePrev[1] != 0;
     assert("'rectSizePrev' can't be 0" && isValid);
 
+    isValid &= uint64_t(m_CommonSettings.inputRectOrigin[0]) + m_CommonSettings.rectSize[0] <= m_CommonSettings.resourceSize[0] && uint64_t(m_CommonSettings.inputRectOrigin[1]) + m_CommonSettings.rectSize[1] <= m_CommonSettings.resourceSize[1];
+    assert("'inputRectOrigin + rectSize' must not exceed 'resourceSize'" && isValid);
+
+    isValid &= uint64_t(m_CommonSettings.outputRectOrigin[0]) + m_CommonSettings.rectSize[0] <= m_CommonSettings.resourceSize[0] && uint64_t(m_CommonSettings.outputRectOrigin[1]) + m_CommonSettings.rectSize[1] <= m_CommonSettings.resourceSize[1];
+    assert("'outputRectOrigin + rectSize' must not exceed 'resourceSize'" && isValid);
+
     isValid &= ((m_CommonSettings.motionVectorScale[0] != 0.0f && m_CommonSettings.motionVectorScale[1] != 0.0f) || m_CommonSettings.isMotionVectorInWorldSpace);
     assert("'mvScale.xy' can't be 0" && isValid);
 
@@ -318,8 +323,11 @@ nrd::Result nrd::InstanceImpl::SetCommonSettings(const CommonSettings& commonSet
     isValid &= m_CommonSettings.historyFixAlternatePixelStrideMaterialID == 999.0f || GetLibraryDesc()->normalEncoding == NormalEncoding::R10_G10_B10_A2_UNORM;
     assert("'historyFixAlternatePixelStrideMaterialID' must be 999 if material ID is not supported by encoding" && isValid);
 
-    isValid &= NRD_SUPPORTS_VIEWPORT_OFFSET || (m_CommonSettings.rectOrigin[0] == 0 && m_CommonSettings.rectOrigin[1] == 0);
-    assert("'rectOrigin' must be 0 if 'NRD_SUPPORTS_VIEWPORT_OFFSET = 0'" && isValid);
+    isValid &= NRD_SUPPORTS_VIEWPORT_OFFSET || (m_CommonSettings.inputRectOrigin[0] == 0 && m_CommonSettings.inputRectOrigin[1] == 0);
+    assert("'inputRectOrigin' must be 0 if 'NRD_SUPPORTS_VIEWPORT_OFFSET = 0'" && isValid);
+
+    isValid &= NRD_SUPPORTS_VIEWPORT_OFFSET || (m_CommonSettings.outputRectOrigin[0] == 0 && m_CommonSettings.outputRectOrigin[1] == 0);
+    assert("'outputRectOrigin' must be 0 if 'NRD_SUPPORTS_VIEWPORT_OFFSET = 0'" && isValid);
 
     isValid &= NRD_SUPPORTS_HISTORY_CONFIDENCE || !m_CommonSettings.isHistoryConfidenceAvailable;
     assert("'isHistoryConfidenceAvailable' must be 'false' if 'NRD_SUPPORTS_HISTORY_CONFIDENCE = 0'" && isValid);
@@ -436,19 +444,34 @@ nrd::Result nrd::InstanceImpl::SetCommonSettings(const CommonSettings& commonSet
 
     m_CameraDelta = float3(translationDelta.x, translationDelta.y, translationDelta.z);
 
-    m_Timer.UpdateElapsedTimeSinceLastSave();
-    m_Timer.SaveCurrentTime();
+    if (isNewFrame) {
+        m_Timer.UpdateElapsedTimeSinceLastSave();
+        m_Timer.SaveCurrentTime();
+    }
 
-    m_TimeDelta = m_CommonSettings.timeDeltaBetweenFrames > 0.0f ? m_CommonSettings.timeDeltaBetweenFrames : m_Timer.GetSmoothedElapsedTime();
-    m_FrameRateScale = max(33.333f / m_TimeDelta, 1.0f);
+    m_TimeDelta = m_CommonSettings.timeDeltaBetweenFrames > 0.0f ? m_CommonSettings.timeDeltaBetweenFrames : m_Timer.GetElapsedTime();
+    m_FrameRateScale = clamp(16.66f / m_TimeDelta, 0.25f, 4.0f);
+
+    if (isNewFrame) {
+        if (m_IsFirstUse || m_CommonSettings.accumulationMode != AccumulationMode::CONTINUE)
+            m_TimeDeltaSmoothed = m_TimeDelta;
+        else {
+            float smoothedFPSprev = 1000.0f / m_TimeDeltaSmoothed;
+            float n = smoothedFPSprev * 0.2f;
+            m_TimeDeltaSmoothed += (m_TimeDelta - m_TimeDeltaSmoothed) / (1.0f + n);
+        }
+    }
+    m_FrameRateScaleSmoothed = clamp(16.66f / m_TimeDeltaSmoothed, 0.25f, 4.0f);
 
     float dx = abs(m_CommonSettings.cameraJitter[0] - m_CommonSettings.cameraJitterPrev[0]);
     float dy = abs(m_CommonSettings.cameraJitter[1] - m_CommonSettings.cameraJitterPrev[1]);
     m_JitterDelta = max(dx, dy);
 
-    float FPS = m_FrameRateScale * 30.0f;
+    float FPS = m_FrameRateScale * 60.0f;
     float nonLinearAccumSpeed = FPS * 0.25f / (1.0f + FPS * 0.25f);
     m_CheckerboardResolveAccumSpeed = lerp(nonLinearAccumSpeed, 0.5f, m_JitterDelta);
+
+    m_IsFirstUse = false;
 
     return isValid ? Result::SUCCESS : Result::INVALID_ARGUMENT;
 }
@@ -469,15 +492,18 @@ nrd::Result nrd::InstanceImpl::SetDenoiserSettings(Identifier identifier, const 
                 const RelaxSettings& settings = *(RelaxSettings*)denoiserSettings;
                 enableAntiFirefly = settings.enableAntiFirefly;
                 checkerboardMode = settings.checkerboardMode;
+            } else if (denoiserData.desc.denoiser == Denoiser::SIGMA_SHADOW || denoiserData.desc.denoiser == Denoiser::SIGMA_SHADOW_TRANSLUCENCY) {
+                const SigmaSettings& settings = *(SigmaSettings*)denoiserSettings;
+                checkerboardMode = settings.checkerboardMode;
             }
 
-            bool isValid = NRD_SUPPORTS_ANTIFIREFLY || !enableAntiFirefly;
-            assert("'enableAntiFirefly' must be 'false' if 'NRD_SUPPORTS_ANTIFIREFLY = 0'" && isValid);
+            bool isAntifireflyValid = NRD_SUPPORTS_ANTIFIREFLY || !enableAntiFirefly;
+            assert("'enableAntiFirefly' must be 'false' if 'NRD_SUPPORTS_ANTIFIREFLY = 0'" && isAntifireflyValid);
 
-            isValid |= NRD_SUPPORTS_CHECKERBOARD || checkerboardMode == CheckerboardMode::OFF;
-            assert("'checkerboardMode' must be 'OFF' if 'NRD_SUPPORTS_CHECKERBOARD = 0'" && isValid);
+            bool isCheckerboardValid = NRD_SUPPORTS_CHECKERBOARD || checkerboardMode == CheckerboardMode::OFF;
+            assert("'checkerboardMode' must be 'OFF' if 'NRD_SUPPORTS_CHECKERBOARD = 0'" && isCheckerboardValid);
 
-            return isValid ? Result::SUCCESS : Result::INVALID_ARGUMENT;
+            return (isAntifireflyValid && isCheckerboardValid) ? Result::SUCCESS : Result::INVALID_ARGUMENT;
         }
     }
 
@@ -506,19 +532,18 @@ nrd::Result nrd::InstanceImpl::GetComputeDispatches(const Identifier* identifier
             // Add a clear dispatch
             const InternalDispatchDesc& internalDispatchDesc = m_Dispatches[m_DispatchClearIndex[clearResource.isInteger ? 1 : 0]];
 
-            uint16_t w = DivideUp(m_CommonSettings.resourceSize[0], clearResource.downsampleFactor);
-            uint16_t h = DivideUp(m_CommonSettings.resourceSize[1], clearResource.downsampleFactor);
+            bool isInput = clearResource.resource.type >= ResourceType::IN_MV && clearResource.resource.type <= ResourceType::IN_SIGNAL;
+            bool isOutput = clearResource.resource.type >= ResourceType::OUT_DIFF_RADIANCE_HITDIST && clearResource.resource.type <= ResourceType::OUT_VALIDATION;
+            bool useRect = isInput || isOutput || clearResource.resource.type == ResourceType::PERMANENT_POOL;
 
-            DispatchDesc dispatchDesc = {};
-            dispatchDesc.name = internalDispatchDesc.name;
-            dispatchDesc.identifier = clearResource.identifier;
-            dispatchDesc.resources = &clearResource.resource;
-            dispatchDesc.resourcesNum = 1;
-            dispatchDesc.pipelineIndex = internalDispatchDesc.pipelineIndex;
-            dispatchDesc.gridWidth = DivideUp(w, internalDispatchDesc.numThreads.width);
-            dispatchDesc.gridHeight = DivideUp(h, internalDispatchDesc.numThreads.height);
+            uint16_t w = useRect ? m_CommonSettings.rectSize[0] : DivideUp(m_CommonSettings.resourceSize[0], clearResource.downsampleFactor);
+            uint16_t h = useRect ? m_CommonSettings.rectSize[1] : DivideUp(m_CommonSettings.resourceSize[1], clearResource.downsampleFactor);
 
-            m_ActiveDispatches.push_back(dispatchDesc);
+            ClearConstants* consts = (ClearConstants*)PushDispatch(internalDispatchDesc, clearResource.identifier, &clearResource.resource, 1, w, h);
+            if (consts) {
+                consts->gRectSize = int2(w, h);
+                consts->gDispatchOutputRectOrigin = isInput ? int2(m_CommonSettings.inputRectOrigin[0], m_CommonSettings.inputRectOrigin[1]) : useRect ? int2(m_CommonSettings.outputRectOrigin[0], m_CommonSettings.outputRectOrigin[1]) : int2(0, 0);
+            }
         }
     }
 
@@ -769,16 +794,13 @@ void nrd::InstanceImpl::AddTextureToTransientPool(const TextureDesc& textureDesc
     m_TransientPool.push_back(textureDesc);
 }
 
-void* nrd::InstanceImpl::PushDispatch(const DenoiserData& denoiserData, uint32_t localIndex) {
-    size_t dispatchIndex = denoiserData.dispatchOffset + localIndex;
-    const InternalDispatchDesc& internalDispatchDesc = m_Dispatches[dispatchIndex];
-
+void* nrd::InstanceImpl::PushDispatch(const InternalDispatchDesc& internalDispatchDesc, Identifier identifier, const ResourceDesc* resources, uint32_t resourcesNum, uint16_t w, uint16_t h) {
     // Copy data
     DispatchDesc dispatchDesc = {};
     dispatchDesc.name = internalDispatchDesc.name;
-    dispatchDesc.identifier = internalDispatchDesc.identifier;
-    dispatchDesc.resources = internalDispatchDesc.resources;
-    dispatchDesc.resourcesNum = internalDispatchDesc.resourcesNum;
+    dispatchDesc.identifier = identifier;
+    dispatchDesc.resources = resources;
+    dispatchDesc.resourcesNum = resourcesNum;
     dispatchDesc.pipelineIndex = internalDispatchDesc.pipelineIndex;
 
     // Update constant data
@@ -796,6 +818,19 @@ void* nrd::InstanceImpl::PushDispatch(const DenoiserData& denoiserData, uint32_t
         memset((void*)dispatchDesc.constantBufferData, 0, dispatchDesc.constantBufferDataSize);
 
     // Update grid size
+    dispatchDesc.gridWidth = DivideUp(w, internalDispatchDesc.numThreads.width);
+    dispatchDesc.gridHeight = DivideUp(h, internalDispatchDesc.numThreads.height);
+
+    // Store
+    m_ActiveDispatches.push_back(dispatchDesc);
+
+    return (void*)dispatchDesc.constantBufferData;
+}
+
+void* nrd::InstanceImpl::PushDispatch(const DenoiserData& denoiserData, uint32_t localIndex) {
+    size_t dispatchIndex = denoiserData.dispatchOffset + localIndex;
+    const InternalDispatchDesc& internalDispatchDesc = m_Dispatches[dispatchIndex];
+
     uint16_t w = m_CommonSettings.rectSize[0];
     uint16_t h = m_CommonSettings.rectSize[1];
     uint16_t d = internalDispatchDesc.downsampleFactor;
@@ -804,20 +839,10 @@ void* nrd::InstanceImpl::PushDispatch(const DenoiserData& denoiserData, uint32_t
         w = m_CommonSettings.rectSizePrev[0];
         h = m_CommonSettings.rectSizePrev[1];
         d = 1;
-    } else if (d == IGNORE_RS) {
-        w = m_CommonSettings.resourceSize[0];
-        h = m_CommonSettings.resourceSize[1];
-        d = 1;
     }
 
     w = DivideUp(w, d);
     h = DivideUp(h, d);
 
-    dispatchDesc.gridWidth = DivideUp(w, internalDispatchDesc.numThreads.width);
-    dispatchDesc.gridHeight = DivideUp(h, internalDispatchDesc.numThreads.height);
-
-    // Store
-    m_ActiveDispatches.push_back(dispatchDesc);
-
-    return (void*)dispatchDesc.constantBufferData;
+    return PushDispatch(internalDispatchDesc, internalDispatchDesc.identifier, internalDispatchDesc.resources, internalDispatchDesc.resourcesNum, w, h);
 }

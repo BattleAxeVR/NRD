@@ -13,7 +13,7 @@ endif()
 # Options
 option(NRD_STATIC_LIBRARY "Build static library" OFF)
 option(NRD_NRI "Pull, build and include NRI into NRD SDK package" ON)
-option(NRD_SUPPORTS_VIEWPORT_OFFSET "Enable 'CommonSettings::rectOrigin' support" OFF)
+option(NRD_SUPPORTS_VIEWPORT_OFFSET "Enable 'CommonSettings::inputRectOrigin' and 'CommonSettings::outputRectOrigin' support" OFF)
 option(NRD_SUPPORTS_CHECKERBOARD "Enable 'checkerboardMode' support" ON)
 option(NRD_SUPPORTS_HISTORY_CONFIDENCE "Enable 'IN_DIFF_CONFIDENCE' and 'IN_SPEC_CONFIDENCE' support" ON)
 option(NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX "Enable 'IN_DISOCCLUSION_THRESHOLD_MIX' support" ON)
@@ -126,7 +126,7 @@ if(NOT TARGET ShaderMake)
         shadermake
         DOWNLOAD_EXTRACT_TIMESTAMP 1
         DOWNLOAD_NO_PROGRESS 1
-        URL https://github.com/NVIDIA-RTX/ShaderMake/archive/18f5a344e7ca8fa65daaf079d07bc8ce38453e05.zip
+        URL "https://github.com/NVIDIA-RTX/ShaderMake/archive/ca92f65f355f0e31cb67a9601baec705441f6401.zip"
     )
     list(APPEND DEPS shadermake)
 endif()
@@ -137,7 +137,7 @@ if(NOT TARGET MathLib)
         mathlib
         DOWNLOAD_EXTRACT_TIMESTAMP 1
         DOWNLOAD_NO_PROGRESS 1
-        URL https://github.com/NVIDIA-RTX/MathLib/archive/refs/tags/v11.zip
+        URL "https://github.com/NVIDIA-RTX/MathLib/archive/refs/tags/v11.zip"
     )
     list(APPEND DEPS mathlib)
 endif()
@@ -156,7 +156,7 @@ if(NOT TARGET NRI AND NRD_NRI)
         nri
         DOWNLOAD_EXTRACT_TIMESTAMP 1
         DOWNLOAD_NO_PROGRESS 1
-        URL https://github.com/NVIDIA-RTX/NRI/archive/refs/tags/v180.zip
+        URL "https://github.com/NVIDIA-RTX/NRI/archive/a67f2d282d9c8629fdfd594a5c5d90b9fd38eb20.zip"
     )
     list(APPEND DEPS nri)
 endif()

@@ -60,14 +60,18 @@ void nrd::InstanceImpl::Update_SigmaShadow(const DenoiserData& denoiserData) {
     }
 
     { // BLUR
-        void* consts = PushDispatch(denoiserData, AsUint(Dispatch::BLUR));
+        SIGMA_BlurConstants* consts = (SIGMA_BlurConstants*)PushDispatch(denoiserData, AsUint(Dispatch::BLUR));
         AddSharedConstants_Sigma(settings, consts);
+        consts->gDispatchInputRectOrigin = consts->gInputRectOrigin;
+        consts->gDispatchOutputRectOrigin = int2(0, 0);
     }
 
     { // POST_BLUR
         uint32_t passIndex = AsUint(Dispatch::POST_BLUR) + (settings.maxStabilizedFrameNum ? 1 : 0);
-        void* consts = PushDispatch(denoiserData, passIndex);
+        SIGMA_BlurConstants* consts = (SIGMA_BlurConstants*)PushDispatch(denoiserData, passIndex);
         AddSharedConstants_Sigma(settings, consts);
+        consts->gDispatchInputRectOrigin = int2(0, 0);
+        consts->gDispatchOutputRectOrigin = settings.maxStabilizedFrameNum ? int2(0, 0) : consts->gOutputRectOrigin;
     }
 
     // TEMPORAL_STABILIZATION
@@ -99,6 +103,18 @@ void nrd::InstanceImpl::AddSharedConstants_Sigma(const SigmaSettings& settings, 
     float3 lightDirectionView = Rotate(m_WorldToView, float3(settings.lightDirection[0], settings.lightDirection[1], settings.lightDirection[2]));
     float stabilizationStrength = frameNum / (1.0f + frameNum);
 
+    uint32_t checkerboard = 2;
+    switch (settings.checkerboardMode) {
+        case CheckerboardMode::BLACK:
+            checkerboard = 0;
+            break;
+        case CheckerboardMode::WHITE:
+            checkerboard = 1;
+            break;
+        default:
+            break;
+    }
+
     SharedConstants* consts = (SharedConstants*)data;
     consts->gWorldToView = m_WorldToView;
     consts->gViewToClip = m_ViewToClip;
@@ -112,15 +128,16 @@ void nrd::InstanceImpl::AddSharedConstants_Sigma(const SigmaSettings& settings, 
     consts->gFrustumPrev = m_FrustumPrev;
     consts->gCameraDelta = m_CameraDelta.xmm;
     consts->gMvScale = float4(m_CommonSettings.motionVectorScale[0], m_CommonSettings.motionVectorScale[1], m_CommonSettings.motionVectorScale[2], m_CommonSettings.isMotionVectorInWorldSpace ? 1.0f : 0.0f);
+    consts->gMvBias = float4(m_CommonSettings.motionVectorBias[0], m_CommonSettings.motionVectorBias[1], m_CommonSettings.motionVectorBias[2], 0.0f);
     consts->gResourceSizeInv = float2(1.0f / float(resourceW), 1.0f / float(resourceH));
     consts->gResourceSizeInvPrev = float2(1.0f / float(resourceWprev), 1.0f / float(resourceHprev));
     consts->gRectSize = float2(float(rectW), float(rectH));
     consts->gRectSizeInv = float2(1.0f / float(rectW), 1.0f / float(rectH));
     consts->gRectSizePrev = float2(float(rectWprev), float(rectHprev));
     consts->gResolutionScale = float2(float(rectW) / float(resourceW), float(rectH) / float(resourceH));
-    consts->gRectOffset = float2(float(m_CommonSettings.rectOrigin[0]) / float(resourceW), float(m_CommonSettings.rectOrigin[1]) / float(resourceH));
     consts->gPrintfAt = uint2(m_CommonSettings.printfAt[0], m_CommonSettings.printfAt[1]);
-    consts->gRectOrigin = uint2(m_CommonSettings.rectOrigin[0], m_CommonSettings.rectOrigin[1]);
+    consts->gInputRectOrigin = int2(m_CommonSettings.inputRectOrigin[0], m_CommonSettings.inputRectOrigin[1]);
+    consts->gOutputRectOrigin = int2(m_CommonSettings.outputRectOrigin[0], m_CommonSettings.outputRectOrigin[1]);
     consts->gRectSizeMinusOne = int2(rectW - 1, rectH - 1);
     consts->gTilesSizeMinusOne = int2(tilesW - 1, tilesH - 1);
     consts->gOrthoMode = m_OrthoMode;
@@ -128,10 +145,12 @@ void nrd::InstanceImpl::AddSharedConstants_Sigma(const SigmaSettings& settings, 
     consts->gDenoisingRange = m_CommonSettings.denoisingRange;
     consts->gPlaneDistSensitivity = settings.planeDistanceSensitivity;
     consts->gStabilizationStrength = m_CommonSettings.accumulationMode == AccumulationMode::CONTINUE ? stabilizationStrength : 0.0f;
+    consts->gCheckerboardResolveAccumSpeed = m_CheckerboardResolveAccumSpeed;
     consts->gDebug = m_CommonSettings.debug;
     consts->gSplitScreen = m_CommonSettings.splitScreen;
     consts->gViewZScale = m_CommonSettings.viewZScale;
     consts->gMinRectDimMulUnproject = (float)min(rectW, rectH) * unproject;
+    consts->gCheckerboard = checkerboard;
     consts->gFrameIndex = m_CommonSettings.frameIndex;
     consts->gIsRectChanged = isRectChanged ? 1 : 0;
 }

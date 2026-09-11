@@ -24,33 +24,33 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     NRD_CTA_ORDER_DEFAULT;
 
     // Tile-based early out
-    float isSky = gIn_Tiles[pixelPos >> 4];
-    if (isSky != 0.0 || pixelPos.x >= gRectSize.x || pixelPos.y >= gRectSize.y)
+    float isSky = NRD_SURFACE( gIn_Tiles, pixelPos >> 4 );
+    if (isSky != 0.0 || any(pixelPos >= gRectSize))
         return;
 
     // Early out if linearZ is beyond denoising range
-    float centerViewZ = UnpackViewZ(gIn_ViewZ[pixelPos]);
+    float centerViewZ = UnpackViewZ(NRD_SURFACE( gIn_ViewZ, pixelPos ));
     if (!IsInDenoisingRange( centerViewZ ))
         return;
 
     float2 pixelUv = ( pixelPos + 0.5 ) * gRectSizeInv;
 
     float centerMaterialID;
-    float4 centerNormalRoughness = NRD_FrontEnd_UnpackNormalAndRoughness(gIn_Normal_Roughness[pixelPos], centerMaterialID);
+    float4 centerNormalRoughness = NRD_FrontEnd_UnpackNormalAndRoughness(NRD_SURFACE( gIn_Normal_Roughness, pixelPos ), centerMaterialID);
     float3 centerNormal = centerNormalRoughness.rgb;
     float centerRoughness = centerNormalRoughness.a;
-    float historyLength = 255.0 * gIn_HistoryLength[pixelPos];
+    float historyLength = 255.0 * NRD_SURFACE( gIn_HistoryLength, pixelPos );
 
     // Diffuse normal weight is used for diffuse and can be used for specular depending on settings.
     // Weight strictness is higher as the Atrous step size increases.
     float diffuseLobeAngleFraction = gLobeAngleFraction / sqrt(gStepSize);
-    #if( NRD_MODE == SH )
+    #if( NRD_MODE == NRD_MODE_SH )
         diffuseLobeAngleFraction = 1.0 / sqrt(gStepSize);
     #endif
     diffuseLobeAngleFraction = lerp(0.99, diffuseLobeAngleFraction, saturate(historyLength / 5.0));
 
-#if( NRD_SPEC )
-    float4 centerSpecularIlluminationAndVariance = gIn_Spec_Variance[pixelPos];
+#if( NRD_HAS_SPEC )
+    float4 centerSpecularIlluminationAndVariance = NRD_SURFACE( gIn_Spec_Variance, pixelPos );
     float centerSpecularLuminance = Color::Luminance(centerSpecularIlluminationAndVariance.rgb);
     float centerSpecularVar = centerSpecularIlluminationAndVariance.a;
     float specularPhiLIlluminationInv = 1.0 / max(1.0e-4, gSpecPhiLuminance * sqrt(centerSpecularVar));
@@ -59,7 +59,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     float diffuseLobeAngleFractionForSimplifiedSpecularNormalWeight = diffuseLobeAngleFraction;
     float specularLobeAngleFraction = gLobeAngleFraction;
 
-    float specularReprojectionConfidence = gIn_SpecReprojectionConfidence[pixelPos];
+    float specularReprojectionConfidence = NRD_SURFACE( gIn_SpecReprojectionConfidence, pixelPos );
     float specularLuminanceWeightRelaxation = 1.0;
     if (gStepSize <= 4)
         specularLuminanceWeightRelaxation = lerp(1.0, specularReprojectionConfidence, gLuminanceEdgeStoppingRelaxation);
@@ -91,14 +91,14 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 
     float sumWSpecular = 0.44198 * 0.44198;
     float4 sumSpecularIlluminationAndVariance = centerSpecularIlluminationAndVariance * float4(sumWSpecular.xxx, sumWSpecular * sumWSpecular);
-    #if( NRD_MODE == SH )
-        RELAX_SH_TYPE centerSpecularSH = gIn_SpecSh[pixelPos];
+    #if( NRD_MODE == NRD_MODE_SH )
+        RELAX_SH_TYPE centerSpecularSH = NRD_SURFACE( gIn_SpecSh, pixelPos );
         RELAX_SH_TYPE sumSpecularSH = centerSpecularSH * sumWSpecular;
     #endif
 #endif
 
-#if( NRD_DIFF )
-    float4 centerDiffuseIlluminationAndVariance = gIn_Diff_Variance[pixelPos];
+#if( NRD_HAS_DIFF )
+    float4 centerDiffuseIlluminationAndVariance = NRD_SURFACE( gIn_Diff_Variance, pixelPos );
     float centerDiffuseLuminance = Color::Luminance(centerDiffuseIlluminationAndVariance.rgb);
     float centerDiffuseVar = centerDiffuseIlluminationAndVariance.a;
     float diffusePhiLIlluminationInv = 1.0 / max(1.0e-4, gDiffPhiLuminance * sqrt(centerDiffuseVar));
@@ -121,8 +121,8 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 
     float sumWDiffuse = 0.44198 * 0.44198;
     float4 sumDiffuseIlluminationAndVariance = centerDiffuseIlluminationAndVariance * float4(sumWDiffuse.xxx, sumWDiffuse * sumWDiffuse);
-    #if( NRD_MODE == SH )
-        RELAX_SH_TYPE centerDiffuseSH = gIn_DiffSh[pixelPos];
+    #if( NRD_MODE == NRD_MODE_SH )
+        RELAX_SH_TYPE centerDiffuseSH = NRD_SURFACE( gIn_DiffSh, pixelPos );
         RELAX_SH_TYPE sumDiffuseSH = centerDiffuseSH * sumWDiffuse;
     #endif
 #endif
@@ -155,10 +155,10 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 
             // Fetching normal, roughness, linear Z
             float sampleMaterialID;
-            float4 sampleNormalRoughnes = NRD_FrontEnd_UnpackNormalAndRoughness(gIn_Normal_Roughness[p], sampleMaterialID);
+            float4 sampleNormalRoughnes = NRD_FrontEnd_UnpackNormalAndRoughness(NRD_SURFACE( gIn_Normal_Roughness, p ), sampleMaterialID);
             float3 sampleNormal = sampleNormalRoughnes.rgb;
             float sampleRoughness = sampleNormalRoughnes.a;
-            float sampleViewZ = UnpackViewZ(gIn_ViewZ[p]);
+            float sampleViewZ = UnpackViewZ(NRD_SURFACE( gIn_ViewZ, p ));
 
             // Calculating sample world position
             float3 sampleWorldPos = GetCurrentWorldPosFromPixelPos(p, sampleViewZ);
@@ -168,7 +168,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
             geometryW *= kernel;
             geometryW *= float(isInside && IsInDenoisingRange( sampleViewZ ));
 
-#if( NRD_SPEC )
+#if( NRD_HAS_SPEC )
             // Getting sample view vector closer to center view vector
             // by adding gRoughnessEdgeStoppingRelaxation * centerWorldPos
             // relaxes view direction based rejection
@@ -185,7 +185,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
             wSpecular *= CompareMaterials(sampleMaterialID, centerMaterialID, gSpecMinMaterial);
             if (wSpecular > 1e-4)
             {
-                float4 sampleSpecularIlluminationAndVariance = gIn_Spec_Variance[p];
+                float4 sampleSpecularIlluminationAndVariance = NRD_SURFACE( gIn_Spec_Variance, p );
                 float sampleSpecularLuminance = Color::Luminance(sampleSpecularIlluminationAndVariance.rgb);
 
                 float specularLuminanceW = abs(centerSpecularLuminance - sampleSpecularLuminance) * specularPhiLIlluminationInv;
@@ -196,13 +196,13 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 
                 sumWSpecular += wSpecular;
                 sumSpecularIlluminationAndVariance += float4(wSpecular.xxx, wSpecular * wSpecular) * sampleSpecularIlluminationAndVariance;
-                #if( NRD_MODE == SH )
-                    sumSpecularSH += gIn_SpecSh[p] * wSpecular;
+                #if( NRD_MODE == NRD_MODE_SH )
+                    sumSpecularSH += NRD_SURFACE( gIn_SpecSh, p ) * wSpecular;
                 #endif
             }
 #endif
 
-#if( NRD_DIFF )
+#if( NRD_HAS_DIFF )
             // Calculating weights for diffuse
             float angled = Math::AcosApproxPositive(dot(centerNormal, sampleNormal));
             float normalWDiffuse = ComputeWeight(angled, diffuseNormalWeightParam, 0.0);
@@ -212,7 +212,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
             wDiffuse *= CompareMaterials(sampleMaterialID, centerMaterialID, gDiffMinMaterial);
             if (wDiffuse > 1e-4)
             {
-                float4 sampleDiffuseIlluminationAndVariance = gIn_Diff_Variance[p];
+                float4 sampleDiffuseIlluminationAndVariance = NRD_SURFACE( gIn_Diff_Variance, p );
                 float sampleDiffuseLuminance = Color::Luminance(sampleDiffuseIlluminationAndVariance.rgb);
 
                 float diffuseLuminanceW = abs(centerDiffuseLuminance - sampleDiffuseLuminance) * diffusePhiLIlluminationInv;
@@ -223,8 +223,8 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 
                 sumWDiffuse += wDiffuse;
                 sumDiffuseIlluminationAndVariance +=  float4(wDiffuse.xxx, wDiffuse * wDiffuse) * sampleDiffuseIlluminationAndVariance;
-                #if( NRD_MODE == SH )
-                    sumDiffuseSH += gIn_DiffSh[p] * wDiffuse;
+                #if( NRD_MODE == NRD_MODE_SH )
+                    sumDiffuseSH += NRD_SURFACE( gIn_DiffSh, p ) * wDiffuse;
                 #endif
             }
 #endif
@@ -232,29 +232,29 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     }
 
     float currHistoryLength = max( historyLength - 1.0, 0.0 );
-#if( NRD_SPEC )
+#if( NRD_HAS_SPEC )
     float4 filteredSpecularIlluminationAndVariance = float4(sumSpecularIlluminationAndVariance / float4(sumWSpecular.xxx, sumWSpecular * sumWSpecular));
-    #if( NRD_MODE == SH )
+    #if( NRD_MODE == NRD_MODE_SH )
         // Luminance output is expected in YCoCg color space in SH mode, converting to YCoCg in last A-Trous pass
         if (gIsLastPass == 1)
             filteredSpecularIlluminationAndVariance.rgb = _NRD_LinearToYCoCg(filteredSpecularIlluminationAndVariance.rgb);
-        gOut_SpecSh[pixelPos] = sumSpecularSH / sumWSpecular;
+        NRD_SURFACE( gOut_SpecSh, pixelPos ) = sumSpecularSH / sumWSpecular;
     #endif
     if (gIsLastPass == 1)
         filteredSpecularIlluminationAndVariance.w = currHistoryLength;
-    gOut_Spec_Variance[pixelPos] = filteredSpecularIlluminationAndVariance;
+    NRD_SURFACE( gOut_Spec_Variance, pixelPos ) = filteredSpecularIlluminationAndVariance;
 #endif
 
-#if( NRD_DIFF )
+#if( NRD_HAS_DIFF )
     float4 filteredDiffuseIlluminationAndVariance = float4(sumDiffuseIlluminationAndVariance / float4(sumWDiffuse.xxx, sumWDiffuse * sumWDiffuse));
-    #if( NRD_MODE == SH )
+    #if( NRD_MODE == NRD_MODE_SH )
         // Luminance output is expected in YCoCg color space in SH mode, converting to YCoCg in last A-Trous pass
         if (gIsLastPass == 1)
             filteredDiffuseIlluminationAndVariance.rgb = _NRD_LinearToYCoCg(filteredDiffuseIlluminationAndVariance.rgb);
-        gOut_DiffSh[pixelPos] = sumDiffuseSH / sumWDiffuse;
+        NRD_SURFACE( gOut_DiffSh, pixelPos ) = sumDiffuseSH / sumWDiffuse;
     #endif
     if (gIsLastPass == 1)
         filteredDiffuseIlluminationAndVariance.w = currHistoryLength;
-    gOut_Diff_Variance[pixelPos] = filteredDiffuseIlluminationAndVariance;
+    NRD_SURFACE( gOut_Diff_Variance, pixelPos ) = filteredDiffuseIlluminationAndVariance;
 #endif
 }

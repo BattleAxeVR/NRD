@@ -8,7 +8,9 @@ distribution of this software and related documentation without an express
 license agreement from NVIDIA CORPORATION is strictly prohibited.
 */
 
-NRD_CONSTANTS_START( Clear_Constants )
+NRD_CONSTANTS_START( ClearConstants )
+    NRD_CONSTANT( int2, gRectSize )
+    NRD_CONSTANT( int2, gDispatchOutputRectOrigin )
     // Only for availability in "Common.hlsl"
     NRD_CONSTANT( float, gDebug )
     NRD_CONSTANT( float, gViewZScale )
@@ -17,9 +19,9 @@ NRD_CONSTANTS_END
 
 NRD_OUTPUTS_START
     #if( FLOAT == 1 )
-        NRD_OUTPUT( RWTexture2D, float4, gOut, u, 0 )
+        NRD_OUTPUT( RWTexture2D, float4, gOut, u, 0, NRD_RESOURCE_OUT_DISPATCH )
     #else
-        NRD_OUTPUT( RWTexture2D, uint4, gOut, u, 0 )
+        NRD_OUTPUT( RWTexture2D, uint4, gOut, u, 0, NRD_RESOURCE_OUT_DISPATCH )
     #endif
 NRD_OUTPUTS_END
 

@@ -43,17 +43,23 @@ NRD_EXPORT void NRD_CS_MAIN( uint2 threadPos : SV_GroupThreadID, uint2 tilePos :
         [unroll]
         for( uint j = 0; j < 4; j++ )
         {
-            uint2 pos = pixelPos + uint2( i, j );
-            float h = gIn_Penumbra[ pos ];
-            float viewZ = UnpackViewZ( gIn_ViewZ[ WithRectOrigin( pos ) ] );
+            int2 pos = pixelPos + int2( i, j );
+            int2 clampedPos = min( pos, gRectSizeMinusOne );
+            int2 inputPos = clampedPos;
+            #if( NRD_SUPPORTS_CHECKERBOARD == 1 )
+                inputPos.x >>= gCheckerboard == 2 ? 0 : 1;
+            #endif
 
-            bool isInf = !IsInDenoisingRange( viewZ );
+            float h = NRD_SURFACE( gIn_Penumbra, inputPos );
+            float viewZ = UnpackViewZ( NRD_SURFACE( gIn_ViewZ, clampedPos ) );
+
+            bool isInf = any( pos > gRectSizeMinusOne ) || !IsInDenoisingRange( viewZ );
             bool isShadow = h == 0;
             bool isLit = IsLit( h );
 
             bool isOpaque = true;
             #if( TRANSLUCENCY == 1 )
-                float3 translucency = gIn_Shadow_Translucency[ pos ].yzw;
+                float3 translucency = NRD_SURFACE( gIn_Shadow_Translucency, inputPos ).yzw;
                 isOpaque = Color::Luminance( translucency ) < 0.003; // TODO: replace with a uniformity test?
             #endif
 
@@ -86,6 +92,6 @@ NRD_EXPORT void NRD_CS_MAIN( uint2 threadPos : SV_GroupThreadID, uint2 tilePos :
         result.z = isInf ? 1.0 : 0.0;
         result.w = 0.0;
 
-        gOut_Tiles[ tilePos ] = result;
+        NRD_SURFACE( gOut_Tiles, tilePos ) = result;
     }
 }

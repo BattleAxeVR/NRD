@@ -11,7 +11,7 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 #pragma once
 
 #define NRD_DESCS_VERSION_MAJOR 4
-#define NRD_DESCS_VERSION_MINOR 17
+#define NRD_DESCS_VERSION_MINOR 18
 
 static_assert(NRD_VERSION_MAJOR == NRD_DESCS_VERSION_MAJOR && NRD_VERSION_MINOR == NRD_DESCS_VERSION_MINOR, "Please, update all NRD SDK files");
 
@@ -40,7 +40,7 @@ namespace nrd
         // NON-NOISY INPUTS
         //=============================================================================================================================
 
-        // 3D world-space motion (RGBA16f+) or 2D screen-space motion (RG16f+), MVs must be non-jittered, MV = previous - current
+        // 3D world-space motion (RGBA16f+) or 2D screen-space motion (RG16f+), MVs after scaling and bias must be non-jittered, MV = previous - current
         IN_MV,
 
         // Data must match encoding in "NRD_FrontEnd_PackNormalAndRoughness" and "NRD_FrontEnd_UnpackNormalAndRoughness" (RGBA8+)
@@ -139,8 +139,9 @@ namespace nrd
         // Denoised signal (R8+)
         OUT_SIGNAL,
 
-        // (Optional) Debug output (RGBA8+), .w = transparency
-        // Used if "CommonSettings::enableValidation = true"
+        // (Optional) REBLUR / RELAX debug layer (RGBA8+), .w = transparency
+        // - required and accessed only if "CommonSettings::enableValidation = true"
+        // - "mini" visualizations accumulate in place, therefore contents must be preserved between frames to be useful
         OUT_VALIDATION,
 
         //=============================================================================================================================

@@ -16,8 +16,8 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 #    include <alloca.h>
 #endif
 
-static_assert(NRD_VERSION_MAJOR >= 4 && NRD_VERSION_MINOR >= 17, "Unsupported NRD version!");
-static_assert(NRI_VERSION >= 179, "Unsupported NRI version!");
+static_assert(NRD_VERSION_MAJOR >= 4 && NRD_VERSION_MINOR >= 18, "Unsupported NRD version!");
+static_assert(NRI_VERSION >= 181, "Unsupported NRI version!");
 
 #define NRD_INTEGRATION_RETURN_FALSE_ON_FAILURE(expr) \
     if ((expr) != nri::Result::SUCCESS) \
@@ -323,7 +323,7 @@ bool Integration::_CreateResources() {
 
         nri::BufferDesc bufferDesc = {};
         bufferDesc.size = m_ConstantBufferSize;
-        bufferDesc.usage = nri::BufferUsageBits::CONSTANT_BUFFER;
+        bufferDesc.usage = nri::BufferUsageBits::CONSTANT;
         NRD_INTEGRATION_RETURN_FALSE_ON_FAILURE(m_iCore.CreateBuffer(*m_Device, bufferDesc, m_ConstantBuffer));
     }
 

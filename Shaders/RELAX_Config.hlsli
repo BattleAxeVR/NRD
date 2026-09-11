@@ -15,6 +15,11 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 #define RELAX_MAX_ACCUM_FRAME_NUM                           255
 #define RELAX_ANTILAG_ACCELERATION_AMOUNT_SCALE             10.0 // Multiplier used to put RelaxAntilagSettings::accelerationAmount to convenient [0; 1] range
 
+// 1.0                    - frame-based ( old behavior )
+// gFrameRateScale * 1.0  - time-based matching "old @ 60 FPS"
+// gFrameRateScale * 0.75 - time-based matching "old @ 80 FPS" ( a bit more relaxed, better for FPS < 60 )
+#define RELAX_FRAME_RATE_COMPENSATION                       ( gFrameRateScale * 0.75 )
+
 #define RELAX_SH_TYPE                                       float3
 
 // Shared constants
@@ -32,16 +37,19 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
     NRD_CONSTANT( float4, gPrevFrustumForward ) \
     NRD_CONSTANT( float4, gCameraDelta ) \
     NRD_CONSTANT( float4, gMvScale ) \
+    NRD_CONSTANT( float4, gMvBias ) \
     NRD_CONSTANT( float2, gJitter ) \
     NRD_CONSTANT( float2, gResolutionScale ) \
-    NRD_CONSTANT( float2, gRectOffset ) \
     NRD_CONSTANT( float2, gResourceSizeInv ) \
     NRD_CONSTANT( float2, gResourceSize ) \
     NRD_CONSTANT( float2, gRectSizeInv ) \
     NRD_CONSTANT( float2, gRectSizePrev ) \
     NRD_CONSTANT( float2, gResourceSizeInvPrev ) \
     NRD_CONSTANT( uint2, gPrintfAt ) \
-    NRD_CONSTANT( uint2, gRectOrigin ) \
+    NRD_CONSTANT( int2, gInputRectOrigin ) \
+    NRD_CONSTANT( int2, gOutputRectOrigin ) \
+    NRD_CONSTANT( int2, gDispatchInputRectOrigin ) \
+    NRD_CONSTANT( int2, gDispatchOutputRectOrigin ) \
     NRD_CONSTANT( int2, gRectSize ) \
     NRD_CONSTANT( float, gSpecMaxAccumulatedFrameNum ) \
     NRD_CONSTANT( float, gSpecMaxFastAccumulatedFrameNum ) \
@@ -80,7 +88,8 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
     NRD_CONSTANT( float, gDebug ) \
     NRD_CONSTANT( float, gOrthoMode ) \
     NRD_CONSTANT( float, gUnproject ) \
-    NRD_CONSTANT( float, gFramerateScale ) \
+    NRD_CONSTANT( float, gFrameRateScale ) \
+    NRD_CONSTANT( float, gFrameRateScaleSmoothed ) \
     NRD_CONSTANT( float, gCheckerboardResolveAccumSpeed ) \
     NRD_CONSTANT( float, gHistoryFixFrameNum ) \
     NRD_CONSTANT( float, gHistoryFixBasePixelStride ) \

@@ -25,11 +25,11 @@ void Preload( uint2 sharedPos, int2 globalPos )
 {
     globalPos = clamp( globalPos, 0, gRectSizeMinusOne );
 
-    SIGMA_TYPE s = gIn_Shadow_Translucency[ globalPos ];
+    SIGMA_TYPE s = NRD_SURFACE( gIn_Shadow_Translucency, globalPos );
     s = SIGMA_BackEnd_UnpackShadow( s );
 
     s_Shadow_Translucency[ sharedPos.y ][ sharedPos.x ] = s;
-    s_Penumbra[ sharedPos.y ][ sharedPos.x ] = gIn_Penumbra[ globalPos ];
+    s_Penumbra[ sharedPos.y ][ sharedPos.x ] = NRD_SURFACE( gIn_Penumbra, globalPos );
 }
 
 uint PackViewZAndHistoryLength( float viewZ, float historyLength )
@@ -55,27 +55,31 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     NRD_CTA_ORDER_DEFAULT;
 
     // Preload
-    float isSky = gIn_Tiles[ pixelPos >> 4 ].x;
+    float isSky = NRD_SURFACE( gIn_Tiles, pixelPos >> 4 ).x;
     PRELOAD_INTO_SMEM_WITH_TILE_CHECK;
+
+    // Tile-based early out
+    if( isSky != 0.0 || any( pixelPos > gRectSizeMinusOne ) )
+        return;
 
     // Center data
     int2 smemPos = threadPos + NRD_BORDER;
     float centerPenumbra = s_Penumbra[ smemPos.y ][ smemPos.x ];
-    float viewZ = UnpackViewZ( gIn_ViewZ[ WithRectOrigin( pixelPos ) ] );
+    float viewZ = UnpackViewZ( NRD_SURFACE( gIn_ViewZ, pixelPos ) );
 
     // Early out #1
-    if( isSky != 0.0 || any( pixelPos > gRectSizeMinusOne ) || !IsInDenoisingRange( viewZ ) )
+    if( !IsInDenoisingRange( viewZ ) )
         return;
 
     // Early out #2
     float2 pixelUv = float2( pixelPos + 0.5 ) * gRectSizeInv;
     float tileValue = TextureCubic( gIn_Tiles, pixelUv * gResolutionScale ).y;
-    bool isHardShadow = ( ( tileValue == 0.0 && NRD_USE_TILE_CHECK ) || centerPenumbra == 0.0 ) && SIGMA_USE_EARLY_OUT_IN_TS;
+    bool earlyOut = CanSkipTemporal( tileValue ) || centerPenumbra == 0.0;
 
-    if( isHardShadow && SIGMA_SHOW == 0 )
+    if( earlyOut && SIGMA_SHOW == 0 )
     {
-        gOut_Shadow_Translucency[ pixelPos ] = PackShadow( s_Shadow_Translucency[ smemPos.y ][ smemPos.x ] );
-        gOut_HistoryLength[ pixelPos ] = PackViewZAndHistoryLength( viewZ, SIGMA_MAX_ACCUM_FRAME_NUM ); // TODO: yes, SIGMA_MAX_ACCUM_FRAME_NUM to allow accumulation in neighbors
+        NRD_SURFACE( gOut_Shadow_Translucency, pixelPos ) = PackShadow( s_Shadow_Translucency[ smemPos.y ][ smemPos.x ] );
+        NRD_SURFACE( gOut_HistoryLength, pixelPos ) = PackViewZAndHistoryLength( viewZ, SIGMA_MAX_ACCUM_FRAME_NUM ); // TODO: yes, SIGMA_MAX_ACCUM_FRAME_NUM to allow accumulation in neighbors
 
         return;
     }
@@ -121,7 +125,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     float3 Xv = Geometry::ReconstructViewPosition( pixelUv, gFrustum, viewZ, gOrthoMode );
     float3 X = Geometry::RotateVectorInverse( gWorldToView, Xv );
 
-    float3 mv = gIn_Mv[ WithRectOrigin( pixelPos ) ] * gMvScale.xyz;
+    float3 mv = NRD_SURFACE( gIn_Mv, pixelPos ) * gMvScale.xyz + gMvBias.xyz;
     float3 Xprev = X;
     float2 smbPixelUv = pixelUv + mv.xy;
 
@@ -143,7 +147,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 
     // History length
     Filtering::Bilinear smbBilinearFilter = Filtering::GetBilinearFilter( smbPixelUv, gRectSizePrev );
-    float2 smbBilinearGatherUv = ( smbBilinearFilter.origin + 1.0 ) * gResourceSizeInvPrev;
+    float2 smbBilinearGatherUv = ( NRD_PIXEL_POS( gIn_HistoryLength, smbBilinearFilter.origin ) + 1.0 ) * gResourceSizeInvPrev;
     uint4 prevData = gIn_HistoryLength.GatherRed( gNearestClamp, smbBilinearGatherUv ).wzxy;
     float4 prevViewZ = asfloat( prevData & ~7 );
     float4 prevHistoryLength = float4( prevData & 7 );
@@ -201,12 +205,18 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     historyClamped = lerp( historyClamped, history, streetMagic );
 
     // Combine with the current frame
-    SIGMA_TYPE result = lerp( input, historyClamped, min( gStabilizationStrength, historyWeight ) );
+    float stabilizationWeight = 1.0 - min( gStabilizationStrength, historyWeight );
+    #if( NRD_SUPPORTS_CHECKERBOARD == 1 )
+        if( gCheckerboard != 2 && Sequence::CheckerBoard( pixelPos, gFrameIndex ) != gCheckerboard )
+            stabilizationWeight *= lerp( 1.0 - gCheckerboardResolveAccumSpeed, 1.0, stabilizationWeight );
+    #endif
+
+    SIGMA_TYPE result = lerp( historyClamped, input, stabilizationWeight );
 
     // Debug ( don't forget that ".x" is used in antilag computations! )
     #if( SIGMA_SHOW == SIGMA_SHOW_TILES )
-        tileValue = gIn_Tiles[ pixelPos >> 4 ].y;
-        tileValue = float( tileValue != 0.0 ); // optional, just to show fully discarded tiles
+        tileValue = NRD_SURFACE( gIn_Tiles, pixelPos >> 4 ).y;
+        tileValue = !CanSkipSpatial( tileValue ); // optional, just to show fully discarded tiles
 
         #if( TRANSLUCENCY == 1 )
             result = lerp( float4( 0, 0, 1, 0 ), result, tileValue );
@@ -231,6 +241,6 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     historyLength = min( historyLength + 1.0, SIGMA_MAX_ACCUM_FRAME_NUM );
 
     // Output
-    gOut_Shadow_Translucency[ pixelPos ] = PackShadow( result );
-    gOut_HistoryLength[ pixelPos ] = PackViewZAndHistoryLength( viewZ, historyLength );
+    NRD_SURFACE( gOut_Shadow_Translucency, pixelPos ) = PackShadow( result );
+    NRD_SURFACE( gOut_HistoryLength, pixelPos ) = PackViewZAndHistoryLength( viewZ, historyLength );
 }
