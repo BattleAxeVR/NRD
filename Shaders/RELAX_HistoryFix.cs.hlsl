@@ -73,8 +73,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 
     // Running sparse cross-bilateral filter
     float baseStride = centerMaterialID == gHistoryFixAlternatePixelStrideMaterialID ? gHistoryFixAlternatePixelStride : gHistoryFixBasePixelStride;
-    float r = baseStride / ( 1.0 + historyLength );
-    r = round( r );
+    int r = int( round( baseStride / ( 1.0 + historyLength ) ) );
 
     [unroll]
     for (int j = -2; j <= 2; j++)
@@ -85,12 +84,12 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
             if (i == 0 && j == 0)
                 continue;
 
-            int2 samplePosInt = pixelPos + int2(i, j) * r;
+            int2 samplePosInt = pixelPos + int2( int2(i, j) * r );
 
             // Apply "mirror" to not waste taps going outside of the screen
             float2 uv = float2( samplePosInt + 0.5 ) * gRectSizeInv;
             uv = MirrorUv( uv );
-            samplePosInt = uv * gRectSize;
+            samplePosInt = int2( uv * gRectSize );
 
             float sampleMaterialID;
             float3 sampleNormal = NRD_FrontEnd_UnpackNormalAndRoughness(NRD_SURFACE( gIn_Normal_Roughness, samplePosInt ), sampleMaterialID).rgb;
@@ -105,7 +104,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
             // Summing up diffuse result
             float diffuseW = geometryWeight;
             diffuseW *= getDiffuseNormalWeight(centerNormal, sampleNormal);
-            diffuseW *= CompareMaterials(sampleMaterialID, centerMaterialID, gDiffMinMaterial);
+            diffuseW *= float( CompareMaterials(sampleMaterialID, centerMaterialID, gDiffMinMaterial) );
 
             if (diffuseW > 1e-4)
             {
@@ -127,7 +126,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
             // Summing up specular result
             float specularW = geometryWeight;
             specularW *= GetSpecularNormalWeight_ATrous(specularNormalWeightParams, centerNormal, sampleNormal, centerV, sampleV);
-            specularW *= CompareMaterials(sampleMaterialID, centerMaterialID, gSpecMinMaterial);
+            specularW *= float( CompareMaterials(sampleMaterialID, centerMaterialID, gSpecMinMaterial) );
 
             if (specularW > 1e-4)
             {

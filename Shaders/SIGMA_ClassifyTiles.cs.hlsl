@@ -30,7 +30,7 @@ NRD_EXPORT void NRD_CS_MAIN( uint2 threadPos : SV_GroupThreadID, uint2 tilePos :
         s_Radius = 0;
     }
 
-    GroupMemoryBarrier();
+    GroupMemoryBarrierWithGroupSync();
 
     uint2 pixelPos = tilePos * 16 + threadPos * uint2( 2, 4 );
 
@@ -54,7 +54,7 @@ NRD_EXPORT void NRD_CS_MAIN( uint2 threadPos : SV_GroupThreadID, uint2 tilePos :
             float viewZ = UnpackViewZ( NRD_SURFACE( gIn_ViewZ, clampedPos ) );
 
             bool isInf = any( pos > gRectSizeMinusOne ) || !IsInDenoisingRange( viewZ );
-            bool isShadow = h == 0;
+            bool isBackfaced = IsBackfaced( h );
             bool isLit = IsLit( h );
 
             bool isOpaque = true;
@@ -63,22 +63,23 @@ NRD_EXPORT void NRD_CS_MAIN( uint2 threadPos : SV_GroupThreadID, uint2 tilePos :
                 isOpaque = Color::Luminance( translucency ) < 0.003; // TODO: replace with a uniformity test?
             #endif
 
-            mask += ( ( isLit || isInf || isShadow ) ? 1 : 0 ) << 0;
-            mask += ( ( ( !isLit && isOpaque ) || isInf || isShadow ) ? 1 : 0 ) << 9;
+            mask += ( ( isLit || isInf || isBackfaced ) ? 1 : 0 ) << 0;
+            mask += ( ( ( !isLit && isOpaque ) || isInf || isBackfaced ) ? 1 : 0 ) << 9;
             mask += ( isInf ? 1 : 0 ) << 18;
 
-            float hitDist = ( isLit || isInf ) ? 0 : h;
-            float pixelSize = PixelRadiusToWorld( gUnproject, gOrthoMode, 1.0, viewZ );
-            float pixelRadius = GetKernelRadiusInPixels( hitDist, pixelSize );
-
-            maxRadius = max( pixelRadius, maxRadius );
+            if( !isLit && !isInf )
+            {
+                float pixelSize = PixelRadiusToWorld( gUnproject, gOrthoMode, 1.0, viewZ );
+                float pixelRadius = GetKernelRadiusInPixels( h, pixelSize );
+                maxRadius = max( pixelRadius, maxRadius );
+            }
         }
     }
 
     InterlockedAdd( s_Mask, mask );
     InterlockedMax( s_Radius, asuint( maxRadius ) );
 
-    GroupMemoryBarrier();
+    GroupMemoryBarrierWithGroupSync();
 
     if( threadIndex == 0 )
     {

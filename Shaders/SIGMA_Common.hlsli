@@ -12,15 +12,16 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 #define PackShadow( s )         Math::Sqrt01( s ) // must match "SIGMA_BackEnd_UnpackShadow"
 #define IsLit( p )              ( p >= NRD_FP16_MAX )
+#define IsBackfaced( p )        ( p == 0.0 )
 
 bool CanSkipSpatial( float tileValue )
 {
-    return tileValue == 0.0 && SIGMA_USE_EARLY_OUT_IN_BLURS;
+    return tileValue == 0.0 && SIGMA_USE_EARLY_OUT_IN_BLURS == 1;
 }
 
 bool CanSkipTemporal( float tileValue )
 {
-    return tileValue == 0.0 && SIGMA_USE_EARLY_OUT_IN_TS;
+    return tileValue == 0.0 && SIGMA_USE_EARLY_OUT_IN_TS == 1;
 }
 
 float3 GetViewVector( float3 X, bool isViewSpace = false )
@@ -40,14 +41,6 @@ float GetKernelRadiusInPixels( float hitDist, float unprojectZ, float scale = 1.
     #endif
 
     return clamp( unclampedRadius, minRadius, SIGMA_MAX_PIXEL_RADIUS );
-}
-
-float AreBothLitOrUnlit( float penumbra1, float penumbra2 )
-{
-    bool NoL1 = penumbra1 == 0.0;
-    bool NoL2 = penumbra2 == 0.0;
-
-    return float( NoL1 == NoL2 );
 }
 
 // TODO: move code below to STL.hlsl

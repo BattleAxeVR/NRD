@@ -314,11 +314,9 @@ float2 MirrorUv( float2 uv )
 float4 IsInScreenBilinear( float2 footprintOrigin, float2 rectSize )
 {
     float4 p = footprintOrigin.xyxy + float4( 0, 0, 1, 1 );
+    bool4 r = ( p >= 0.0 ) & ( p < rectSize.xyxy );
 
-    float4 r = float4( p >= 0.0 );
-    r *= float4( p < rectSize.xyxy );
-
-    return r.xzxz * r.yyww;
+    return float4( r.xzxz & r.yyww );
 }
 
 float2 ApplyCheckerboardShift( float2 pos, uint mode, uint counter, uint frameIndex )
@@ -620,7 +618,7 @@ float GetDisocclusionThreshold( float disocclusionThreshold, float frustumSize, 
     uv01 *= invResourceSize.xyxy; \
     uv23 *= invResourceSize.xyxy; \
     uv4 *= invResourceSize; \
-    int3 bilinearOrigin = int3( centerPos, 0 );
+    int3 bilinearOrigin = int3( int2( centerPos ), 0 );
 
 /*
 IMPORTANT:

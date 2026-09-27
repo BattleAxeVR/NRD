@@ -133,7 +133,7 @@ NOISY INPUTS:
     #define NRD_EXPORT
 
 // DXC
-#elif( defined( NRD_COMPILER_DXC ) || defined( __hlsl_dx_compiler ) )
+#elif( defined( NRD_COMPILER_DXC ) || defined( __hlsl_dx_compiler ) || defined( __SLANG__ ) )
 
     #ifdef __spirv__
         // Make VK validation happy...
@@ -348,7 +348,9 @@ NOISY INPUTS:
     #define NRD_SURFACE( resourceName, pos )                                            resourceName[ NRD_PIXEL_POS( resourceName, pos ) ]
 
     // Explicitly set matrix layout for shader compilation outside of NRD environment
-    #pragma pack_matrix( column_major )
+    #ifndef __SLANG__
+        #pragma pack_matrix( column_major )
+    #endif
 #endif
 
 // Permutations
@@ -659,24 +661,6 @@ float _NRD_SG_InnerProduct( NRD_SG a, NRD_SG b )
 //=================================================================================================================================
 // FRONT-END - NORMAL AND ROUGHNESS
 //=================================================================================================================================
-
-// Used to decode linear roughness accessed via "Gather" instructions
-float4 NRD_FrontEnd_UnpackRoughness( float4 r )
-{
-    // This is a part of improved oct-packing
-    #if( NRD_NORMAL_ENCODING == NRD_NORMAL_ENCODING_R10G10B10A2_UNORM )
-        r = abs( r * 2.0 - 1.0 );
-    #endif
-
-    // Decode to linear roughness
-    #if( NRD_ROUGHNESS_ENCODING == NRD_ROUGHNESS_ENCODING_SQRT_LINEAR )
-        r.w = saturate( r.w * r.w );
-    #elif( NRD_ROUGHNESS_ENCODING == NRD_ROUGHNESS_ENCODING_SQ_LINEAR )
-        r.w = sqrt( saturate( r.w ) );
-    #endif
-
-    return r;
-}
 
 // This function is used in all denoisers to decode normal, linear roughness and optional materialID
 // IN_NORMAL_ROUGHNESS => X

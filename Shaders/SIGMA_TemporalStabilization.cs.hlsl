@@ -74,7 +74,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     // Early out #2
     float2 pixelUv = float2( pixelPos + 0.5 ) * gRectSizeInv;
     float tileValue = TextureCubic( gIn_Tiles, pixelUv * gResolutionScale ).y;
-    bool earlyOut = CanSkipTemporal( tileValue ) || centerPenumbra == 0.0;
+    bool earlyOut = CanSkipTemporal( tileValue ) || IsBackfaced( centerPenumbra );
 
     if( earlyOut && SIGMA_SHOW == 0 )
     {
@@ -106,7 +106,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
             {
                 float penum = s_Penumbra[ pos.y ][ pos.x ];
 
-                w = AreBothLitOrUnlit( centerPenumbra, penum );
+                w = float( IsBackfaced( centerPenumbra ) == IsBackfaced( penum ) );
                 w *= GetGaussianWeight( length( float2( i - NRD_BORDER, j - NRD_BORDER ) / NRD_BORDER ) );
             }
 
@@ -177,7 +177,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
     history = SIGMA_BackEnd_UnpackShadow( history );
 
     // Clamp history
-    sigma *= lerp( SIGMA_TS_SIGMA_SCALE, 1.0, 1.0 / ( 1.0 + historyLength ) ); // TODO: lerp( SIGMA_TS_SIGMA_SCALE, 1.0, 0.125 ) != SIGMA_TS_SIGMA_SCALE
+    sigma *= lerp( SIGMA_TS_SIGMA_SCALE, 1.0, 1.0 / ( 1.0 + historyLength ) );
 
     SIGMA_TYPE inputMin = m1 - sigma;
     SIGMA_TYPE inputMax = m1 + sigma;
@@ -185,24 +185,11 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
 
     // Antilag
     float antilag = abs( historyClamped.x - history.x );
-    #if( SIGMA_ADJUST_HISTORY_LENGTH_BY_ANTILAG == 1 )
-        antilag = Math::Sqrt01( antilag );
-    #endif
-    antilag = saturate( 1.0 - antilag );
-
-    #if( SIGMA_ADJUST_HISTORY_LENGTH_BY_ANTILAG == 1 )
-        historyLength *= antilag; // TODO: reduce influence if history is short?
-    #endif
+    antilag = 1.0 - Math::Sqrt01( antilag );
+    historyLength *= antilag;
 
     // History weight
     float historyWeight = historyLength / ( 1.0 + historyLength );
-    #if( SIGMA_ADJUST_HISTORY_LENGTH_BY_ANTILAG == 0 )
-        historyWeight *= antilag;
-    #endif
-
-    // Street magic ( helps to smooth out "penumbra to 1" regions )
-    float streetMagic = 0.6 * historyWeight * antilag; // TODO: * historyClamped.x? previously was without "* antilag"
-    historyClamped = lerp( historyClamped, history, streetMagic );
 
     // Combine with the current frame
     float stabilizationWeight = 1.0 - min( gStabilizationStrength, historyWeight );
@@ -227,7 +214,7 @@ NRD_EXPORT void NRD_CS_MAIN( NRD_CS_MAIN_ARGS )
         result *= all( ( pixelPos & 15 ) != 0 );
     #elif( SIGMA_SHOW == SIGMA_SHOW_HISTORY_WEIGHT )
         #if( TRANSLUCENCY == 1 )
-            result.yzw = historyWeight * float( !isHardShadow );
+            result.yzw = historyWeight * float( !earlyOut );
         #endif
     #elif( SIGMA_SHOW == SIGMA_SHOW_HISTORY_LENGTH )
         #if( TRANSLUCENCY == 1 )
