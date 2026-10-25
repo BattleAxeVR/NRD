@@ -17,18 +17,64 @@ jobs:
           submodules: true
 
       - name: Deploy
-        run: .\1-Deploy.bat
+        run: .\Scripts\Windows\1-Deploy.bat
 
       - name: Build
-        run: .\2-Build.bat
+        run: .\Scripts\Windows\2-Build.bat
 
       - name: Prepare SDK
-        run: .\3-PrepareSDK.bat
+        run: .\Scripts\Windows\3-PrepareSDK.bat
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: NRD SDK (Windows x64)
+          path: _NRD_SDK
+
+  Build-Windows-ARM64:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Deploy
+        run: .\Scripts\Windows\1-Deploy.bat -G "Visual Studio 17 2022" -A ARM64
+
+      - name: Build
+        run: .\Scripts\Windows\2-Build.bat
+
+      - name: Prepare SDK
+        run: .\Scripts\Windows\3-PrepareSDK.bat
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NRD SDK (Windows ARM64)
+          path: _NRD_SDK
+
+  Build-Windows-ARM64EC:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Deploy
+        run: .\Scripts\Windows\1-Deploy.bat -G "Visual Studio 17 2022" -A ARM64EC
+
+      - name: Build
+        run: .\Scripts\Windows\2-Build.bat
+
+      - name: Prepare SDK
+        run: .\Scripts\Windows\3-PrepareSDK.bat
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NRD SDK (Windows ARM64EC)
           path: _NRD_SDK
 
   Build-Ubuntu:
@@ -50,13 +96,13 @@ jobs:
           sudo apt-get install -y ninja-build
 
       - name: Deploy
-        run: bash 1-Deploy.sh
+        run: bash Scripts/Linux/1-Deploy.sh
 
       - name: Build
-        run: bash 2-Build.sh
+        run: bash Scripts/Linux/2-Build.sh
 
       - name: Prepare SDK
-        run: bash 3-PrepareSDK.sh
+        run: bash Scripts/Linux/3-PrepareSDK.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

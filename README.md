@@ -38,14 +38,14 @@ Memory usage:
 - see [table](#memory-usage)
 
 *NRD* is distributed as a source as well with a “ready-to-use” library (if used in a precompiled form). It can be integrated into any *D3D12*, *Vulkan* or *D3D11* engine using two variants:
-1. Integration via *NRI*-based [NRDIntegration](#integration) layer. In this case, the engine should expose native *GAPI* pointers for certain types of objects. The integration layer is provided as a part of SDK
+1. Integration via *NRI*-based [*NRD integration*](#integration) layer. In this case, the engine should expose native *GAPI* pointers for certain types of objects. The integration layer is provided as a part of SDK
 2. Native implementation of the *NRD* API using engine capabilities
 
 ## QUICK START
 
 NRD is easy to use:
 - [build](#how-to-build) with `NRD_NRI=ON`
-- HOST code - use [NRDIntegration](https://github.com/NVIDIA-RTX/NRD/blob/master/Integration/NRDIntegration.h) layer for easy integration
+- HOST code - use [*NRD integration*](https://github.com/NVIDIA-RTX/NRD/blob/master/Integration/NRDIntegration.h) layer for easy integration
   - understand [inputs](#inputs)
   - set inputs and outputs via `ResourceSnapshot` (see [example](https://github.com/NVIDIA-RTX/NRD-Sample/blob/f5a574e6eb630f48b89437a224dede75beed4dcb/Source/NRDSample.cpp#L417))
   - on each frame call `NewFrame`, `SetCommonSettings`, `SetDenoiserSettings` and `Denoise`
@@ -63,18 +63,22 @@ See *[NRD sample](https://github.com/NVIDIA-RTX/NRD-Sample)* project for all det
 
 ## HOW TO BUILD?
 
-- Install [*Cmake*](https://cmake.org/download/) 3.22+
+- Install [*Cmake*](https://cmake.org/download/) 3.30+
 - Build (variant 1) - using *Git* and *CMake* explicitly
   - Clone project and init submodules
   - Generate and build the project using *CMake*
   - To build the binary with static MSVC runtime, add `-DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>"` parameter when deploying the project
 - Build (variant 2) - by running scripts:
-  - Run `1-Deploy`
-  - Run `2-Build`
+  - To deploy the project, run `Scripts/<Platform>/1-Deploy`
+  - To build the project, run `Scripts/<Platform>/2-Build`
+  - To package the SDK, run `Scripts/<Platform>/3-PrepareSDK`
+  - To clean generated files, run `Scripts/<Platform>/4-Clean`
+
+`<Platform>` is `Windows` or `Linux`. Use `.bat` on Windows; run `.sh` scripts with `bash` on Linux.
 
 *CMake* options:
 - Common:
-  - `NRD_NRI` - pull, build and include *NRI* into *NRD SDK* package, required to use [NRDIntegration](https://github.com/NVIDIA-RTX/NRD/blob/master/Integration/NRDIntegration.h) layer (OFF by default)
+  - `NRD_NRI` - pull, build and include *NRI* into *NRD SDK* package, required to use [*NRD integration*](https://github.com/NVIDIA-RTX/NRD/blob/master/Integration/NRDIntegration.h) layer (OFF by default)
   - `NRD_SHADERS_PATH` - shader output path override
   - `NRD_EMBEDS_DXBC_SHADERS` - *NRD* compiles and embeds DXBC shaders (ON by default on Windows)
   - `NRD_EMBEDS_DXIL_SHADERS` - *NRD* compiles and embeds DXIL shaders (ON by default on Windows)
@@ -94,15 +98,14 @@ See *[NRD sample](https://github.com/NVIDIA-RTX/NRD-Sample)* project for all det
 
 SDK packaging:
 - Compile the solution (*Debug* / *Release* or both, depending on what you want to get in *NRD* package)
-- Run `3-PrepareSDK`
+- Run `Scripts/<Platform>/3-PrepareSDK`
 - Grab generated in the root directory `_NRD_SDK` and `_NRI_SDK` (if needed) folders and use them in your project
 
 Updating:
 - Clone latest
-- Run `4-Clean`
-- Run `1-Deploy`
-- Run `2-Build`
-- Run `3-Run`
+- Run `Scripts/<Platform>/4-Clean`
+- Run `Scripts/<Platform>/1-Deploy`
+- Run `Scripts/<Platform>/2-Build`
 
 ## HOW TO REPORT ISSUES?
 
@@ -134,7 +137,7 @@ Flow:
 6. *GetComputeDispatches* - returns per-dispatch data for the list of denoisers (bound subresources with required state, constant buffer data). Returned memory is owned by the instance and gets overwritten by the next *GetComputeDispatches* call
 7. *DestroyInstance* - destroys an instance
 
-*NRD* doesn't make any *GAPI* calls. The application is supposed to invoke a set of compute *Dispatch* calls to do denoising. Refer to [NRDIntegration](https://github.com/NVIDIA-RTX/NRD/blob/master/Integration/NRDIntegration.hpp) file as an example of an integration using low level RHI.
+*NRD* doesn't make any *GAPI* calls. The application is supposed to invoke a set of compute *Dispatch* calls to do denoising. Refer to [*NRD integration*](https://github.com/NVIDIA-RTX/NRD/blob/master/Integration/NRDIntegration.hpp) file as an example of an integration using low level RHI.
 
 *NRD* doesn't have a "resize" functionality. On a resolution change the old denoiser needs to be destroyed and a new one needs to be created with new parameters. But *NRD* supports dynamic resolution scaling via `CommonSettings::resourceSize, resourceSizePrev, rectSize, rectSizePrev`.
 
@@ -144,7 +147,7 @@ Some textures can be requested as inputs or outputs for a method. Required resou
 
 # INTEGRATION
 
-If GAPI's native pointers are retrievable from the RHI, the [NRDIntegration](https://github.com/NVIDIA-RTX/NRD/blob/master/Integration/NRDIntegration.h) layer can be used to greatly simplify the integration. In this case, the application should only provide native pointers for the *Device*, *CommandList* and *Textures* into entities, compatible with an API abstraction layer (*[NRI](https://github.com/NVIDIA-RTX/NRI)*), and all work with *NRD* library will be hidden inside the integration layer:
+If GAPI's native pointers are retrievable from the RHI, the [*NRD Integration*](https://github.com/NVIDIA-RTX/NRD/blob/master/Integration/NRDIntegration.h) layer can be used to greatly simplify the integration. In this case, the application should only provide native pointers for the *Device*, *CommandList* and *Textures* into entities, compatible with an API abstraction layer (*[NRI](https://github.com/NVIDIA-RTX/NRI)*), and all work with *NRD* library will be hidden inside the integration layer:
 
 *Engine or App → native objects → NRD integration layer → NRI → NRD*
 
@@ -698,6 +701,11 @@ The resolve process takes place on the application side and has the following mo
 
 Re-jittering math with minorly modified inputs can also be used with RESTIR produced sampling without involving SH denoisers. You only need to get light direction in the current pixel from RESTIR. Despite that RESTIR produces noisy light selections, its low variations can be easily handled by DLSS or other upscaling techs.
 
+Using [*NRD Integration*](https://github.com/NVIDIA-RTX/NRD/blob/master/Integration/NRDIntegration.h) requires [*NRI*](https://github.com/NVIDIA-RTX/NRI), which features the [*NRIUpscaler.h*](https://github.com/NVIDIA-RTX/NRI/blob/main/Include/Extensions/NRIUpscaler.h) extension for easy access to popular upscalers:
+- DLSS SR
+- FSR 4 (with fallback to FSR 3)
+- XeSS.
+
 <details>
 <summary>(CLICK) Shader code:</summary>
 
@@ -857,7 +865,7 @@ float hitDist = lerp( indirectDiffuseHitDist, directDiffuseHitDist, directHitDis
 
 **[NRD]** Read all comments in `NRDDescs.h`, `NRDSettings.h` and `NRD.hlsli`.
 
-**[NRD]** The *NRD API* has been designed to support integration into native *Vulkan* apps. If the RHI you work with is D3D11-like, not all provided data will be needed. [NRDIntegration.hpp](https://github.com/NVIDIA-RTX/NRD/blob/master/Integration/NRDIntegration.hpp) can be used as a guide demonstrating how to map *NRD API* to a *Vulkan*-like RHI.
+**[NRD]** The *NRD API* has been designed to support integration into native *Vulkan* apps. If the RHI you work with is D3D11-like, not all provided data will be needed. [*NRD Integration*](https://github.com/NVIDIA-RTX/NRD/blob/master/Integration/NRDIntegration.hpp) can be used as a guide demonstrating how to map *NRD API* to a *Vulkan*-like RHI.
 
 **[NRD]** *NRD* requires linear roughness and world-space normals. See `NRD.hlsli` for more details and supported customizations.
 
