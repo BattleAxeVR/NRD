@@ -247,7 +247,7 @@ static const float3 g_Special8[ 8 ] =
 #if( NRD_NORMAL_ENCODING == NRD_NORMAL_ENCODING_R10G10B10A2_UNORM )
     #define CompareMaterials( m0, m, minm )     ( max( m0, minm ) == max( m, minm ) )
 #else
-    #define CompareMaterials( m0, m, minm )     true
+    #define CompareMaterials( m0, m, minm )     ( max( m0, minm ) == max( m, minm ) )
 #endif
 
 #define UnpackViewZ( z )                        abs( z * gViewZScale )
